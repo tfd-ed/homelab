@@ -8,23 +8,8 @@ Note that this project is not intended for heavy production workloads. In Cambod
 I intended to release YouTube videos docummenting this journey. 
 - [1st Video: ខ្ញុំលែងប្រើ Cloud ហើយធ្វើ HomeLab Server មួយខ្លួនឯង | Moving from Cloud to Home Lab](https://youtu.be/VtUXaHL9B6Q?si=FgUlQjMOOWyEZPOM)
 
-
-## 📋 Table of Contents
-
-- [Hardware Specifications](#-hardware-specifications)
-- [Infrastructure Overview](#%EF%B8%8F-infrastructure-overview)
-- [Repository Structure](#-repository-structure)
-- [Quick Start](#-quick-start)
-- [Complete Setup Guide](#-complete-setup-guide)
-- [Operations & Quick Reference](#-operations--quick-reference)
-- [Security](#-security)
-- [Remote Access](#-remote-access)
-- [Monitoring](#-monitoring)
-- [Workflow Automation](#-workflow-automation-n8n)
-- [CI/CD Pipeline](#-cicd-pipeline)
-- [Troubleshooting](#-troubleshooting)
-- [Documentation](#-documentation)
-- [Planned Improvements](#-planned-improvements)
+## Architecture Overview
+<img src="diagram/homelab-architecture-logos.png" alt="Infrastructure Architecture Diagram" width="800" align="center"/>
 
 ## 💻 Hardware Specifications
 
