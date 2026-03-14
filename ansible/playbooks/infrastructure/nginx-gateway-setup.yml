@@ -1,0 +1,127 @@
+---
+- name: Install and configure Nginx Proxy Manager on gateway VM
+  hosts: gateway
+  become: yes
+  gather_facts: yes
+
+  vars:
+    npm_install_dir: /opt/nginx-proxy-manager
+    npm_data_dir: /opt/nginx-proxy-manager/data
+    npm_letsencrypt_dir: /opt/nginx-proxy-manager/letsencrypt
+    npm_version: latest
+
+  tasks:
+    - name: Create Nginx Proxy Manager directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ npm_install_dir }}"
+        - "{{ npm_data_dir }}"
+        - "{{ npm_letsencrypt_dir }}"
+
+    - name: Create Docker Compose file for Nginx Proxy Manager
+      copy:
+        dest: "{{ npm_install_dir }}/docker-compose.yml"
+        content: |
+          version: '3.8'
+
+          services:
+            nginx-proxy-manager:
+              image: 'jc21/nginx-proxy-manager:{{ npm_version }}'
+              container_name: nginx-proxy-manager
+              restart: unless-stopped
+              ports:
+                - '80:80'      # HTTP
+                - '443:443'    # HTTPS
+                - '81:81'      # Admin Web UI
+              environment:
+                # MySQL/MariaDB connection (using internal SQLite by default)
+                # Uncomment below if you want to use external database
+                # DB_MYSQL_HOST: "database-vm"
+                # DB_MYSQL_PORT: 3306
+                # DB_MYSQL_USER: "npm"
+                # DB_MYSQL_PASSWORD: "npm"
+                # DB_MYSQL_NAME: "npm"
+                
+                # Disable IPv6 if not needed
+                DISABLE_IPV6: 'true'
+              volumes:
+                - {{ npm_data_dir }}:/data
+                - {{ npm_letsencrypt_dir }}:/etc/letsencrypt
+              healthcheck:
+                test: ["CMD", "/bin/check-health"]
+                interval: 10s
+                timeout: 3s
+                retries: 3
+        mode: "0644"
+
+    - name: Check if Nginx Proxy Manager is already running
+      community.docker.docker_container_info:
+        name: nginx-proxy-manager
+      register: npm_container_info
+      ignore_errors: yes
+
+    - name: Stop existing Nginx Proxy Manager container if exists
+      community.docker.docker_compose_v2:
+        project_src: "{{ npm_install_dir }}"
+        state: absent
+      when: npm_container_info.exists
+
+    - name: Start Nginx Proxy Manager with Docker Compose
+      community.docker.docker_compose_v2:
+        project_src: "{{ npm_install_dir }}"
+        state: present
+      register: npm_deploy
+
+    - name: Wait for Nginx Proxy Manager to be healthy
+      community.docker.docker_container_info:
+        name: nginx-proxy-manager
+      register: npm_status
+      until: npm_status.container.State.Health.Status == "healthy"
+      retries: 30
+      delay: 5
+      ignore_errors: yes
+
+    - name: Get Nginx Proxy Manager container status
+      community.docker.docker_container_info:
+        name: nginx-proxy-manager
+      register: npm_final_status
+
+    - name: Display Nginx Proxy Manager status
+      debug:
+        msg:
+          - "=================================================="
+          - "Nginx Proxy Manager Deployment Complete"
+          - "=================================================="
+          - ""
+          - "📊 Status: {{ npm_final_status.container.State.Status }}"
+          - "🌐 Admin UI: http://192.168.100.210:81"
+          - "🔒 HTTPS Port: 443"
+          - "🌍 HTTP Port: 80"
+          - ""
+          - "🔐 Default Login Credentials:"
+          - "   Email:    admin@example.com"
+          - "   Password: changeme"
+          - ""
+          - "⚠️  IMPORTANT: Change the default password immediately after first login!"
+          - ""
+          - "📝 Next Steps:"
+          - "   1. Access the admin UI at http://192.168.100.210:81"
+          - "   2. Login with default credentials above"
+          - "   3. Change admin password and email"
+          - "   4. Add proxy hosts via the web interface"
+          - "   5. Configure SSL certificates (Let's Encrypt supported)"
+          - ""
+          - "📂 Data locations:"
+          - "   Config: {{ npm_data_dir }}"
+          - "   SSL Certs: {{ npm_letsencrypt_dir }}"
+          - "   Docker Compose: {{ npm_install_dir }}/docker-compose.yml"
+          - ""
+          - "🔧 Management commands:"
+          - "   Start:   docker compose -f {{ npm_install_dir }}/docker-compose.yml up -d"
+          - "   Stop:    docker compose -f {{ npm_install_dir }}/docker-compose.yml down"
+          - "   Logs:    docker logs nginx-proxy-manager -f"
+          - "   Restart: docker restart nginx-proxy-manager"
+          - "=================================================="

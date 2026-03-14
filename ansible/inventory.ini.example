@@ -1,0 +1,56 @@
+[proxmox]
+proxmox-host ansible_host=192.168.100.50 ansible_user=root ansible_ssh_private_key_file=/path/to/your/key ansible_ssh_port=your_ssh_port
+
+[vms]
+k8s-master ansible_host=192.168.100.201
+k8s-worker-1 ansible_host=192.168.100.202
+k8s-worker-2 ansible_host=192.168.100.203 
+database-vm ansible_host=192.168.100.205
+gateway-vm ansible_host=192.168.100.210
+monitoring ansible_host=192.168.100.220
+n8n ansible_host=192.168.100.230
+ci-cd ansible_host=192.168.100.240
+
+[vms:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=/path/to/your/key
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+[gateway]
+gateway-vm ansible_host=192.168.100.210
+
+[gateway:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=/path/to/your/key
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+[k8s]
+k8s-master ansible_host=192.168.100.201
+k8s-worker-1 ansible_host=192.168.100.202
+k8s-worker-2 ansible_host=192.168.100.203
+
+[k8s:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=/path/to/your/key
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+[database]
+database-vm ansible_host=192.168.100.205
+
+[database:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=/path/to/your/key
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+[ci-cd]
+ci-cd ansible_host=192.168.100.240
+
+[ci-cd:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=/path/to/your/key
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'

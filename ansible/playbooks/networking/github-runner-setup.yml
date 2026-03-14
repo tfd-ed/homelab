@@ -1,0 +1,155 @@
+---
+- name: Setup GitHub Actions Self-Hosted Runner
+  hosts: ci-cd
+  become: yes
+  gather_facts: yes
+
+  vars:
+    runner_version: "2.313.0"
+    runner_user: "ubuntu"
+    runner_home: "/home/{{ runner_user }}"
+    runner_dir: "{{ runner_home }}/actions-runner"
+    github_url: "https://github.com"
+    # Set these via command line or in inventory:
+    # -e "repo_url=https://github.com/username/homelab-journey"
+    # -e "runner_token=YOUR_RUNNER_TOKEN"
+
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - curl
+          - jq
+          - tar
+          - libssl-dev
+          - libffi-dev
+          - python3
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    - name: Install kubectl
+      shell: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/kubectl
+      args:
+        creates: /usr/local/bin/kubectl
+
+    - name: Install kustomize
+      shell: |
+        curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+        mv kustomize /usr/local/bin/
+      args:
+        creates: /usr/local/bin/kustomize
+
+    - name: Create actions-runner directory
+      file:
+        path: "{{ runner_dir }}"
+        state: directory
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: "0755"
+
+    - name: Check if runner is already configured
+      stat:
+        path: "{{ runner_dir }}/.runner"
+      register: runner_configured
+
+    - name: Download GitHub Actions runner
+      become_user: "{{ runner_user }}"
+      get_url:
+        url: "https://github.com/actions/runner/releases/download/v{{ runner_version }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        dest: "{{ runner_home }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        mode: "0644"
+      when: not runner_configured.stat.exists
+
+    - name: Extract GitHub Actions runner
+      become_user: "{{ runner_user }}"
+      unarchive:
+        src: "{{ runner_home }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        dest: "{{ runner_dir }}"
+        remote_src: yes
+      when: not runner_configured.stat.exists
+
+    - name: Display runner configuration instructions
+      debug:
+        msg:
+          - "========================================"
+          - "GitHub Actions Runner Setup"
+          - "========================================"
+          - ""
+          - "TO CONFIGURE THE RUNNER:"
+          - ""
+          - "1. Go to your GitHub repository:"
+          - "   https://github.com/YOUR-USERNAME/homelab-journey/settings/actions/runners/new"
+          - ""
+          - "2. Get the registration token from the page"
+          - ""
+          - "3. SSH into the ci-cd VM:"
+          - "   ssh ubuntu@192.168.100.240 -i ssh-keys/vm-key"
+          - ""
+          - "4. Configure the runner:"
+          - "   cd {{ runner_dir }}"
+          - "   ./config.sh --url YOUR_REPO_URL --token YOUR_TOKEN --name homelab-runner --labels self-hosted,homelab"
+          - ""
+          - "5. Install as a service:"
+          - "   sudo ./svc.sh install {{ runner_user }}"
+          - "   sudo ./svc.sh start"
+          - ""
+          - "6. Verify the service:"
+          - "   sudo ./svc.sh status"
+          - ""
+          - "Example:"
+          - "  cd {{ runner_dir }}"
+          - "  ./config.sh --url https://github.com/username/homelab-journey --token ABCD1234 --name homelab-runner --labels self-hosted,homelab"
+          - "  sudo ./svc.sh install {{ runner_user }}"
+          - "  sudo ./svc.sh start"
+          - ""
+          - "========================================"
+      when: not runner_configured.stat.exists
+
+    - name: Check runner service status
+      shell: "{{ runner_dir }}/svc.sh status"
+      register: runner_status
+      changed_when: false
+      failed_when: false
+      when: runner_configured.stat.exists
+
+    - name: Display runner status
+      debug:
+        msg:
+          - "Runner is configured and running!"
+          - "Status: {{ runner_status.stdout }}"
+          - ""
+          - "To check logs:"
+          - "  sudo journalctl -u actions.runner.* -f"
+      when: runner_configured.stat.exists and runner_status.rc == 0
+
+    - name: Copy kubeconfig from K8s master
+      become_user: "{{ runner_user }}"
+      shell: |
+        mkdir -p {{ runner_home }}/.kube
+        scp -o StrictHostKeyChecking=no -i /home/ubuntu/.ssh/id_rsa ubuntu@192.168.100.201:/home/ubuntu/.kube/config {{ runner_home }}/.kube/config || true
+      args:
+        creates: "{{ runner_home }}/.kube/config"
+
+    - name: Set kubeconfig permissions
+      file:
+        path: "{{ runner_home }}/.kube/config"
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: "0600"
+
+    - name: Test kubectl connection
+      become_user: "{{ runner_user }}"
+      shell: kubectl get nodes
+      register: kubectl_test
+      changed_when: false
+      failed_when: false
+
+    - name: Display kubectl test results
+      debug:
+        msg:
+          - "Kubectl connection test:"
+          - "{{ kubectl_test.stdout if kubectl_test.rc == 0 else 'Failed to connect. You may need to manually copy the kubeconfig.' }}"

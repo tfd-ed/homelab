@@ -1,0 +1,320 @@
+---
+- name: Setup CI/CD environment on ci-cd VM
+  hosts: ci-cd
+  become: yes
+  gather_facts: yes
+
+  vars:
+    # GitHub runner configuration (optional - can configure later)
+    github_runner_version: "2.314.1"
+    github_runner_name: "homelab-runner"
+
+    # Docker registry configuration
+    registry_port: 5000
+    registry_data_dir: /var/lib/docker-registry
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Update /etc/hosts for registry hostname
+      blockinfile:
+        path: /etc/hosts
+        block: |
+          127.0.0.1 registry.homelab.local
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - REGISTRY"
+
+    - name: Install essential build tools
+      apt:
+        name:
+          - git
+          - curl
+          - wget
+          - jq
+          - build-essential
+          - python3
+          - python3-pip
+          - python3-venv
+          - nodejs
+          - npm
+          - unzip
+          - zip
+          - nginx
+        state: present
+
+    - name: Configure Nginx as registry reverse proxy
+      copy:
+        dest: /etc/nginx/sites-available/registry
+        content: |
+          server {
+              listen 80;
+              server_name registry.homelab.local;
+
+              client_max_body_size 0;
+              chunked_transfer_encoding on;
+
+              location / {
+                  proxy_pass http://127.0.0.1:{{ registry_port }};
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_read_timeout 900;
+              }
+          }
+        mode: "0644"
+
+    - name: Enable Nginx registry site
+      file:
+        src: /etc/nginx/sites-available/registry
+        dest: /etc/nginx/sites-enabled/registry
+        state: link
+      notify: Restart Nginx
+
+    - name: Remove Nginx default site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Restart Nginx
+
+    - name: Install kubectl for K8s deployments
+      shell: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/
+      args:
+        creates: /usr/local/bin/kubectl
+
+    - name: Install helm for K8s package management
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Create runner user for GitHub Actions
+      user:
+        name: runner
+        comment: "GitHub Actions Runner User"
+        shell: /bin/bash
+        create_home: yes
+        groups: docker
+        append: yes
+
+    - name: Create runner directory
+      file:
+        path: /home/runner/actions-runner
+        state: directory
+        owner: runner
+        group: runner
+        mode: "0755"
+
+    - name: Download GitHub Actions runner
+      get_url:
+        url: "https://github.com/actions/runner/releases/download/v{{ github_runner_version }}/actions-runner-linux-x64-{{ github_runner_version }}.tar.gz"
+        dest: /home/runner/actions-runner-{{ github_runner_version }}.tar.gz
+        owner: runner
+        group: runner
+      register: runner_download
+
+    - name: Extract GitHub Actions runner
+      unarchive:
+        src: /home/runner/actions-runner-{{ github_runner_version }}.tar.gz
+        dest: /home/runner/actions-runner
+        remote_src: yes
+        owner: runner
+        group: runner
+      when: runner_download.changed
+
+    - name: Install runner dependencies
+      shell: /home/runner/actions-runner/bin/installdependencies.sh
+      args:
+        creates: /home/runner/actions-runner/.runner
+
+    - name: Allow ubuntu user to manage runner service
+      copy:
+        dest: /etc/sudoers.d/runner-service
+        content: |
+          # Allow ubuntu user to manage GitHub Actions runner service
+          ubuntu ALL=(runner) NOPASSWD: /home/runner/actions-runner/svc.sh *
+          ubuntu ALL=(root) NOPASSWD: /home/runner/actions-runner/svc.sh *
+          ubuntu ALL=(root) NOPASSWD: /usr/local/bin/runner-*
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+    - name: Create runner service wrapper scripts
+      copy:
+        dest: "/usr/local/bin/{{ item.name }}"
+        content: |
+          #!/bin/bash
+          cd /home/runner/actions-runner && ./svc.sh {{ item.action }}
+        mode: "0755"
+      loop:
+        - { name: "runner-start", action: "start" }
+        - { name: "runner-stop", action: "stop" }
+        - { name: "runner-status", action: "status" }
+        - { name: "runner-install", action: "install runner" }
+        - { name: "runner-uninstall", action: "uninstall" }
+
+    - name: Create Docker registry data directory
+      file:
+        path: "{{ registry_data_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Check if registry container is running
+      shell: docker ps --filter "name=^registry$" --format {% raw %}"{{.Names}}"{% endraw %}
+      register: registry_running
+      changed_when: false
+
+    - name: Deploy Docker Registry container
+      shell: |
+        docker run -d \
+          --name registry \
+          --restart=always \
+          -p {{ registry_port }}:5000 \
+          -v {{ registry_data_dir }}:/var/lib/registry \
+          registry:2
+      when: registry_running.stdout != "registry"
+
+    - name: Configure Docker to use insecure registry
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "insecure-registries": ["192.168.100.240:{{ registry_port }}", "registry.homelab.local:{{ registry_port }}", "registry.homelab.local"]
+          }
+        mode: "0644"
+      notify: Restart Docker
+
+    - name: Create kubeconfig directory for runner user
+      file:
+        path: /home/runner/.kube
+        state: directory
+        owner: runner
+        group: runner
+        mode: "0755"
+
+    - name: Fetch kubeconfig from k8s-master
+      slurp:
+        src: /home/ubuntu/.kube/config
+      register: kubeconfig_master
+      delegate_to: k8s-master
+      become: yes
+      become_user: ubuntu
+
+    - name: Copy kubeconfig to runner user on ci-cd VM
+      copy:
+        content: "{{ kubeconfig_master.content | b64decode }}"
+        dest: /home/runner/.kube/config
+        owner: runner
+        group: runner
+        mode: "0600"
+
+    - name: Create kubeconfig directory for ubuntu user
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0755"
+
+    - name: Copy kubeconfig to ubuntu user on ci-cd VM
+      copy:
+        content: "{{ kubeconfig_master.content | b64decode }}"
+        dest: /home/ubuntu/.kube/config
+        owner: ubuntu
+        group: ubuntu
+        mode: "0600"
+
+    - name: Create runner configuration script
+      copy:
+        dest: /home/runner/configure-runner.sh
+        content: |
+          #!/bin/bash
+          # GitHub Actions Runner Configuration Script
+
+          echo "================================================"
+          echo "GitHub Actions Self-Hosted Runner Setup"
+          echo "================================================"
+          echo ""
+          echo "To configure the runner, you need:"
+          echo "1. Repository URL (e.g., https://github.com/username/repo)"
+          echo "2. Registration token from GitHub"
+          echo ""
+          echo "Get the token from:"
+          echo "  Repo Settings → Actions → Runners → New self-hosted runner"
+          echo ""
+          echo "Then run (as ubuntu user):"
+          echo "  cd /home/runner/actions-runner"
+          echo "  sudo -u runner ./config.sh --url YOUR_REPO_URL --token YOUR_TOKEN --name {{ github_runner_name }}"
+          echo "  sudo runner-install"
+          echo "  sudo runner-start"
+          echo ""
+          echo "Or as runner user:"
+          echo "  cd /home/runner/actions-runner"
+          echo "  ./config.sh --url YOUR_REPO_URL --token YOUR_TOKEN --name {{ github_runner_name }}"
+          echo "  sudo ./svc.sh install runner"
+          echo "  sudo ./svc.sh start"
+          echo ""
+          echo "Manage service (from anywhere as ubuntu):"
+          echo "  sudo runner-status"
+          echo "  sudo runner-stop"
+          echo "  sudo runner-start"
+          echo ""
+          echo "Registry is available at: registry.homelab.local"
+          echo "Example: docker push registry.homelab.local/myapp:latest"
+          echo ""
+        owner: runner
+        group: runner
+        mode: "0755"
+
+    - name: Display setup completion
+      debug:
+        msg:
+          - "===== CI/CD Environment Setup Complete ====="
+          - ""
+          - "Installed components:"
+          - "  ✓ GitHub Actions runner (v{{ github_runner_version }})"
+          - "  ✓ Docker Registry on port {{ registry_port }}"
+          - "  ✓ kubectl (Kubernetes CLI)"
+          - "  ✓ helm (Kubernetes package manager)"
+          - "  ✓ Build tools (git, nodejs, python3, etc.)"
+          - ""
+          - "Docker Registry:"
+          - "  - URL: registry.homelab.local (port :{{ registry_port }} proxied via Nginx)"
+          - "  - Push: docker push registry.homelab.local/image:tag"
+          - "  - Pull: docker pull registry.homelab.local/image:tag"
+          - ""
+          - "GitHub Actions runner setup:"
+          - "  ssh ubuntu@192.168.100.240"
+          - "  Run: /home/runner/configure-runner.sh (for full instructions)"
+          - ""
+          - "Quick start (as ubuntu user):"
+          - "  cd /home/runner/actions-runner"
+          - "  sudo -u runner ./config.sh --url REPO_URL --token TOKEN --name homelab-runner"
+          - "  sudo runner-install"
+          - "  sudo runner-start"
+          - ""
+          - "Manage runner service (from anywhere as ubuntu):"
+          - "  sudo runner-status"
+          - "  sudo runner-stop"
+          - "  sudo runner-start"
+          - ""
+          - "The runner user has:"
+          - "  - Docker access (in docker group)"
+          - "  - kubectl configured for K8s cluster"
+          - "  - All build tools installed"
+
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+
+    - name: Restart Nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes

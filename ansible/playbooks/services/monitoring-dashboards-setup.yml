@@ -1,0 +1,157 @@
+---
+- name: Provision Grafana Dashboards on Monitoring VM
+  hosts: monitoring
+  remote_user: ubuntu
+  become: yes
+  vars:
+    grafana_dashboards_dir: /opt/monitoring/grafana/provisioning/dashboards
+    grafana_dashboards_json_dir: /opt/monitoring/grafana/dashboards
+    # Pre-selected dashboards from grafana.com
+    grafana_dashboards:
+      - id: 1860
+        revision: 37
+        name: node-exporter-full
+        description: "Node Exporter Full - Complete system metrics"
+      - id: 11074
+        revision: 9
+        name: node-exporter-dashboard
+        description: "Node Exporter Dashboard - System overview"
+      - id: 3662
+        revision: 2
+        name: prometheus-overview
+        description: "Prometheus 2.0 Overview"
+      - id: 7362
+        revision: 5
+        name: kubernetes-cluster-monitoring
+        description: "Kubernetes Cluster Monitoring"
+      - id: 15661
+        revision: 1
+        name: kubernetes-nodes
+        description: "Kubernetes Nodes Monitoring"
+      - id: 12708
+        revision: 1
+        name: docker-containers
+        description: "Docker Container Monitoring"
+      - id: 893
+        revision: 1
+        name: docker-monitoring
+        description: "Docker and System Monitoring"
+      - id: 9628
+        revision: 7
+        name: postgresql-database
+        description: "PostgreSQL Database Dashboard"
+
+  tasks:
+    - name: Ensure Grafana dashboard directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "472"
+        group: "472"
+        mode: "0755"
+      loop:
+        - "{{ grafana_dashboards_dir }}"
+        - "{{ grafana_dashboards_json_dir }}"
+
+    - name: Create dashboard provisioning configuration
+      copy:
+        content: |
+          apiVersion: 1
+          providers:
+            - name: 'Homelab Dashboards'
+              orgId: 1
+              folder: 'Homelab'
+              type: file
+              disableDeletion: false
+              updateIntervalSeconds: 30
+              allowUiUpdates: true
+              options:
+                path: /var/lib/grafana/dashboards
+                foldersFromFilesStructure: true
+        dest: "{{ grafana_dashboards_dir }}/homelab.yml"
+        owner: "472"
+        group: "472"
+        mode: "0644"
+
+    - name: Check if jq is installed
+      command: which jq
+      register: jq_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Install jq for JSON processing
+      apt:
+        name: jq
+        state: present
+        update_cache: yes
+      when: jq_check.rc != 0
+
+    - name: Download Grafana dashboards from grafana.com
+      shell: |
+        curl -s "https://grafana.com/api/dashboards/{{ item.id }}/revisions/{{ item.revision }}/download" | \
+        jq '.dashboard' | \
+        jq '. + {
+          "id": null,
+          "uid": "{{ item.name }}",
+          "title": "{{ item.description }}"
+        }' > "{{ grafana_dashboards_json_dir }}/{{ item.name }}.json"
+      args:
+        creates: "{{ grafana_dashboards_json_dir }}/{{ item.name }}.json"
+      loop: "{{ grafana_dashboards }}"
+      register: download_result
+      changed_when: download_result.rc == 0
+
+    - name: Set correct ownership for dashboard JSON files
+      file:
+        path: "{{ grafana_dashboards_json_dir }}"
+        owner: "472"
+        group: "472"
+        recurse: yes
+
+    - name: Check if monitoring stack is running
+      shell: docker ps | grep -q grafana
+      register: grafana_running
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Restart Grafana container to load dashboards
+      shell: |
+        cd /opt/monitoring
+        docker-compose restart grafana
+      when: grafana_running.rc == 0
+
+    - name: Wait for Grafana to be ready after restart
+      uri:
+        url: "http://localhost:3000/api/health"
+        method: GET
+        status_code: 200
+      register: grafana_health
+      until: grafana_health.status == 200
+      retries: 30
+      delay: 2
+      when: grafana_running.rc == 0
+
+    - name: Display dashboard access information
+      debug:
+        msg:
+          - "============================================"
+          - "Grafana Dashboards Provisioned Successfully!"
+          - "============================================"
+          - ""
+          - "Access Grafana: http://192.168.100.220:3000"
+          - "Default credentials: admin / admin"
+          - ""
+          - "Dashboards provisioned in 'Homelab' folder:"
+          - "  - Node Exporter Full (Complete system metrics)"
+          - "  - Node Exporter Dashboard (System overview)"
+          - "  - Prometheus 2.0 Overview"
+          - "  - Kubernetes Cluster Monitoring"
+          - "  - Kubernetes Nodes Monitoring"
+          - "  - Docker Container Monitoring"
+          - "  - Docker and System Monitoring"
+          - "  - PostgreSQL Database Dashboard"
+          - ""
+          - "Note: If monitoring stack wasn't running, start it with:"
+          - "  cd /opt/monitoring && docker-compose up -d"
+          - "  Then run this playbook again to restart Grafana"
+          - "============================================"

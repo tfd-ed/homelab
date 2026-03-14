@@ -1,0 +1,130 @@
+# SSH Keys and Credentials
+ssh-keys/
+*.pem
+*.key
+!*.pub
+*.ppk
+
+# Environment Variables and Secrets
+.env
+.env.*
+!.env.example
+ansible/.env
+ansible/.env.*
+!ansible/.env.example
+**/secrets.yml
+**/vault.yml
+**/vault-password.txt
+.vault_pass
+ansible/inventory.ini
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/terraform.tfvars
+terraform/*.backup
+terraform/crash.log
+terraform/crash.*.log
+terraform/.terraformrc
+terraform/terraform.rc
+
+# Ansible
+ansible/*.retry
+ansible/.vault_password
+*.retry
+
+# Kubernetes
+kubeconfig
+kubeconfig.*
+!kubeconfig.example
+*.kubeconfig
+k8s/**/secrets/
+k8s/**/*-secret.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+diagram/.venv/
+diagram/venv/
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*~
+
+# GitHub Actions (keeping workflows but ignoring local runs)
+.github/
+!.github/workflows/
+!.github/SECRETS.md
+
+# Node (if any)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Documentation Build
+docs/_build/
+site/
+
+# Local Development
+.local/
+local/
+scratch/
+test/
+
+# Database Dumps and Backups
+*.sql
+*.dump
+*.backup
+backups/
+
+# Monitoring Data (if running locally)
+prometheus/data/
+grafana/data/
+
+# Compiled Files
+*.class
+*.dll
+*.exe
+*.o
+*.so

@@ -1,0 +1,196 @@
+---
+- name: Setup Database Server
+  hosts: database-vm
+  become: yes
+  vars:
+    postgres_version: "16"
+    mysql_version: "8.4"
+    mongo_version: "8.2"
+    # Default passwords - CHANGE THESE IN PRODUCTION
+    postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') | default('changeme_postgres', true) }}"
+    mysql_root_password: "{{ lookup('ansible.builtin.env', 'MYSQL_ROOT_PASSWORD') | default('changeme_mysql', true) }}"
+    mongo_root_password: "{{ lookup('ansible.builtin.env', 'MONGO_ROOT_PASSWORD') | default('changeme_mongo', true) }}"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - software-properties-common
+          - python3-pip
+        state: present
+
+    - name: Create database directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /opt/databases
+        - /opt/databases/postgres/data
+        - /opt/databases/mysql/data
+        - /opt/databases/mongo/data
+        - /opt/databases/backups
+
+    - name: Create Docker network for databases
+      docker_network:
+        name: db_network
+        driver: bridge
+        state: present
+
+    - name: Deploy PostgreSQL container
+      docker_container:
+        name: postgres
+        image: "postgres:{{ postgres_version }}-alpine"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "5432:5432"
+        env:
+          POSTGRES_PASSWORD: "{{ postgres_password }}"
+          POSTGRES_USER: "postgres"
+          PGDATA: "/var/lib/postgresql/data/pgdata"
+        volumes:
+          - /opt/databases/postgres/data:/var/lib/postgresql/data
+        networks:
+          - name: db_network
+        healthcheck:
+          test: ["CMD-SHELL", "pg_isready -U postgres"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
+    - name: Deploy MySQL container
+      docker_container:
+        name: mysql
+        image: "mysql:{{ mysql_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "3306:3306"
+        env:
+          MYSQL_ROOT_PASSWORD: "{{ mysql_root_password }}"
+        volumes:
+          - /opt/databases/mysql/data:/var/lib/mysql
+        networks:
+          - name: db_network
+        healthcheck:
+          test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
+    - name: Deploy MongoDB container
+      docker_container:
+        name: mongodb
+        image: "mongo:{{ mongo_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "27017:27017"
+        env:
+          MONGO_INITDB_ROOT_USERNAME: "admin"
+          MONGO_INITDB_ROOT_PASSWORD: "{{ mongo_root_password }}"
+        volumes:
+          - /opt/databases/mongo/data:/data/db
+        networks:
+          - name: db_network
+        healthcheck:
+          test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
+    - name: Create backup script
+      copy:
+        dest: /opt/databases/backup.sh
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          # Database Backup Script
+          BACKUP_DIR="/opt/databases/backups"
+          DATE=$(date +%Y%m%d_%H%M%S)
+
+          # PostgreSQL Backup
+          docker exec postgres pg_dumpall -U postgres | gzip > "${BACKUP_DIR}/postgres_${DATE}.sql.gz"
+
+          # MySQL Backup
+          docker exec mysql mysqldump -u root -p{{ mysql_root_password }} --all-databases | gzip > "${BACKUP_DIR}/mysql_${DATE}.sql.gz"
+
+          # MongoDB Backup
+          docker exec mongodb mongodump --username admin --password {{ mongo_root_password }} --authenticationDatabase admin --out=/tmp/backup
+          docker cp mongodb:/tmp/backup "${BACKUP_DIR}/mongodb_${DATE}"
+          docker exec mongodb rm -rf /tmp/backup
+          tar -czf "${BACKUP_DIR}/mongodb_${DATE}.tar.gz" -C "${BACKUP_DIR}" "mongodb_${DATE}"
+          rm -rf "${BACKUP_DIR}/mongodb_${DATE}"
+
+          # Keep only last 7 days of backups
+          find "${BACKUP_DIR}" -type f -mtime +7 -delete
+
+          echo "Backup completed: ${DATE}"
+
+    - name: Setup daily backup cron job
+      cron:
+        name: "Database daily backup"
+        minute: "0"
+        hour: "2"
+        job: "/opt/databases/backup.sh >> /var/log/db-backup.log 2>&1"
+        state: present
+
+    - name: Configure UFW - Allow PostgreSQL
+      ufw:
+        rule: allow
+        port: "5432"
+        proto: tcp
+        comment: "PostgreSQL"
+      when: ansible_facts.services['ufw'] is defined
+
+    - name: Configure UFW - Allow MySQL
+      ufw:
+        rule: allow
+        port: "3306"
+        proto: tcp
+        comment: "MySQL"
+      when: ansible_facts.services['ufw'] is defined
+
+    - name: Configure UFW - Allow MongoDB
+      ufw:
+        rule: allow
+        port: "27017"
+        proto: tcp
+        comment: "MongoDB"
+      when: ansible_facts.services['ufw'] is defined
+
+    - name: Display database connection information
+      debug:
+        msg:
+          - "==================================================="
+          - "Database Server Setup Complete!"
+          - "==================================================="
+          - "PostgreSQL: {{ ansible_host }}:5432"
+          - "  User: postgres"
+          - "  Password: {{ postgres_password }}"
+          - ""
+          - "MySQL: {{ ansible_host }}:3306"
+          - "  User: root"
+          - "  Password: {{ mysql_root_password }}"
+          - ""
+          - "MongoDB: {{ ansible_host }}:27017"
+          - "  User: admin"
+          - "  Password: {{ mongo_root_password }}"
+          - ""
+          - "⚠️  IMPORTANT: Change default passwords in production!"
+          - "⚠️  Set environment variables before running:"
+          - "   export POSTGRES_PASSWORD=your_secure_password"
+          - "   export MYSQL_ROOT_PASSWORD=your_secure_password"
+          - "   export MONGO_ROOT_PASSWORD=your_secure_password"
+          - "==================================================="

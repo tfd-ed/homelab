@@ -1,0 +1,322 @@
+---
+- name: Install K3s on master node
+  hosts: k8s-master
+  become: yes
+  gather_facts: yes
+
+  vars:
+    k3s_version: v1.28.8+k3s1
+    k3s_server_args: "--write-kubeconfig-mode=644 --disable=traefik --node-taint CriticalAddonsOnly=true:NoExecute"
+
+  tasks:
+    - name: Set system hostname
+      hostname:
+        name: k8s-master
+
+    - name: Update /etc/hosts with cluster nodes
+      blockinfile:
+        path: /etc/hosts
+        block: |
+          192.168.100.201 k8s-master
+          192.168.100.202 k8s-worker-1
+          192.168.100.203 k8s-worker-2
+          192.168.100.240 registry.homelab.local
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - K8S CLUSTER"
+
+    - name: Disable swap
+      shell: |
+        swapoff -a
+        sed -i '/ swap / s/^/#/' /etc/fstab
+
+    - name: Create K3s config directory
+      file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: "0755"
+
+    - name: Configure container registry
+      copy:
+        dest: /etc/rancher/k3s/registries.yaml
+        content: |
+          mirrors:
+            registry.homelab.local:
+              endpoint:
+                - "http://registry.homelab.local:5000"
+          configs:
+            "registry.homelab.local:5000":
+              tls:
+                insecure_skip_verify: true
+        mode: "0644"
+      notify: Restart K3s Master
+
+    - name: Check if Docker is installed
+      command: which docker
+      register: docker_check
+      changed_when: false
+      failed_when: false
+
+    - name: Configure Docker to use insecure registry (if Docker is installed)
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "insecure-registries": ["192.168.100.240:5000", "registry.homelab.local:5000", "registry.homelab.local"]
+          }
+        mode: "0644"
+      when: docker_check.rc == 0
+      notify: Restart Docker
+
+    - name: Install K3s on master
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="{{ k3s_version }}" sh -s - server {{ k3s_server_args }}
+      args:
+        creates: /usr/local/bin/k3s
+
+    - name: Wait for K3s to be ready
+      wait_for:
+        path: /etc/rancher/k3s/k3s.yaml
+        state: present
+        timeout: 60
+
+    - name: Wait for node to be ready
+      shell: k3s kubectl wait --for=condition=Ready node/k8s-master --timeout=60s
+      retries: 5
+      delay: 10
+      register: result
+      until: result.rc == 0
+
+    - name: Get K3s node token
+      slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token
+
+    - name: Save token for workers
+      set_fact:
+        k3s_node_token: "{{ k3s_token.content | b64decode | trim }}"
+
+    - name: Get kubeconfig
+      slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: kubeconfig_content
+
+    - name: Display master setup completion
+      debug:
+        msg:
+          - "K3s master installed successfully"
+          - "Node token: {{ k3s_node_token }}"
+          - "Master IP: 192.168.100.201"
+
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+
+    - name: Restart K3s Master
+      systemd:
+        name: k3s
+        state: restarted
+
+- name: Install K3s on worker nodes
+  hosts: k8s-worker-1,k8s-worker-2
+  become: yes
+  gather_facts: yes
+  serial: 1
+
+  vars:
+    k3s_version: v1.28.8+k3s1
+    k3s_master_ip: 192.168.100.201
+
+  tasks:
+    - name: Set system hostname
+      hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Update /etc/hosts with cluster nodes
+      blockinfile:
+        path: /etc/hosts
+        block: |
+          192.168.100.201 k8s-master
+          192.168.100.202 k8s-worker-1
+          192.168.100.203 k8s-worker-2
+          192.168.100.240 registry.homelab.local
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - K8S CLUSTER"
+
+    - name: Disable swap
+      shell: |
+        swapoff -a
+        sed -i '/ swap / s/^/#/' /etc/fstab
+
+    - name: Create K3s config directory
+      file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: "0755"
+
+    - name: Configure container registry
+      copy:
+        dest: /etc/rancher/k3s/registries.yaml
+        content: |
+          mirrors:
+            registry.homelab.local:
+              endpoint:
+                - "http://registry.homelab.local:5000"
+          configs:
+            "registry.homelab.local:5000":
+              tls:
+                insecure_skip_verify: true
+        mode: "0644"
+      notify: Restart K3s Agent
+
+    - name: Check if Docker is installed
+      command: which docker
+      register: docker_check
+      changed_when: false
+      failed_when: false
+
+    - name: Configure Docker to use insecure registry (if Docker is installed)
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "insecure-registries": ["192.168.100.240:5000", "registry.homelab.local:5000", "registry.homelab.local"]
+          }
+        mode: "0644"
+      when: docker_check.rc == 0
+      notify: Restart Docker
+
+    - name: Get node token from master
+      set_fact:
+        k3s_token: "{{ hostvars['k8s-master']['k3s_node_token'] }}"
+
+    - name: Install K3s agent on worker
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="{{ k3s_version }}" K3S_URL=https://{{ k3s_master_ip }}:6443 K3S_TOKEN="{{ k3s_token }}" sh -
+      args:
+        creates: /usr/local/bin/k3s-agent
+
+    - name: Wait for K3s agent to start
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: yes
+      register: k3s_agent_service
+      until: k3s_agent_service.status.ActiveState == "active"
+      retries: 5
+      delay: 10
+
+    - name: Display worker setup completion
+      debug:
+        msg: "K3s worker {{ inventory_hostname }} joined cluster successfully"
+
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+
+    - name: Restart K3s Agent
+      systemd:
+        name: k3s-agent
+        state: restarted
+
+- name: Configure kubectl access and verify cluster
+  hosts: k8s-master
+  become: yes
+  gather_facts: no
+
+  tasks:
+    - name: Wait for all nodes to be ready
+      shell: k3s kubectl get nodes --no-headers | wc -l
+      register: node_count
+      until: node_count.stdout | int == 3
+      retries: 10
+      delay: 10
+
+    - name: Get cluster nodes status
+      shell: k3s kubectl get nodes -o wide
+      register: cluster_nodes
+      changed_when: false
+
+    - name: Display cluster status
+      debug:
+        msg: "{{ cluster_nodes.stdout_lines }}"
+
+    - name: Create .kube directory for ubuntu user
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0755"
+
+    - name: Copy kubeconfig for ubuntu user
+      copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: /home/ubuntu/.kube/config
+        remote_src: yes
+        owner: ubuntu
+        group: ubuntu
+        mode: "0600"
+
+    - name: Update kubeconfig server address for ubuntu user
+      replace:
+        path: /home/ubuntu/.kube/config
+        regexp: "127.0.0.1"
+        replace: "192.168.100.201"
+
+    - name: Fetch kubeconfig to local machine
+      fetch:
+        src: /home/ubuntu/.kube/config
+        dest: "{{ playbook_dir }}/../kubeconfig"
+        flat: yes
+
+    - name: Deploy ingress-nginx controller
+      shell: |
+        k3s kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/baremetal/deploy.yaml
+      register: ingress_deploy
+      changed_when: "'created' in ingress_deploy.stdout or 'configured' in ingress_deploy.stdout"
+
+    - name: Wait for ingress-nginx controller to be ready
+      shell: k3s kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=120s
+      retries: 3
+      delay: 10
+      register: ingress_ready
+      until: ingress_ready.rc == 0
+
+    - name: Get ingress-nginx service details
+      shell: k3s kubectl get svc -n ingress-nginx ingress-nginx-controller -o wide
+      register: ingress_svc
+      changed_when: false
+
+    - name: Display next steps
+      debug:
+        msg:
+          - "===== K3s Cluster Setup Complete ====="
+          - ""
+          - "Cluster has 3 nodes: 1 master + 2 workers"
+          - ""
+          - "Ingress Controller:"
+          - "  ✓ ingress-nginx deployed (v1.10.0 baremetal)"
+          - "  Service: {{ ingress_svc.stdout_lines }}"
+          - "  Verify: kubectl get pods -n ingress-nginx"
+          - "  Access via NodePort on any worker IP"
+          - ""
+          - "Container Registry:"
+          - "  ✓ Configured for registry.homelab.local"
+          - "  Test: kubectl run test --image=registry.homelab.local/myapp:latest"
+          - ""
+          - "Access from master node:"
+          - "  ssh ubuntu@192.168.100.201"
+          - "  kubectl get nodes"
+          - ""
+          - "Access from your local machine:"
+          - "  export KUBECONFIG={{ playbook_dir }}/../kubeconfig"
+          - "  kubectl get nodes"
+          - ""
+          - "Or copy to default location:"
+          - "  cp {{ playbook_dir }}/../kubeconfig ~/.kube/config-homelab"
+          - "  export KUBECONFIG=~/.kube/config-homelab"
+          - ""
+          - "Install kubectl on macOS:"
+          - "  brew install kubectl"

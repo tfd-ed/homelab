@@ -1,0 +1,90 @@
+---
+- name: Configure Proxmox Host
+  hosts: tunnel
+  become: true
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      tags: update
+
+    - name: Install fastfetch (neofetch alternative)
+      block:
+        - name: Download fastfetch deb package
+          get_url:
+            url: "https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-amd64.deb"
+            dest: "/tmp/fastfetch.deb"
+            mode: "0644"
+
+        - name: Install fastfetch from deb
+          apt:
+            deb: "/tmp/fastfetch.deb"
+      tags: fastfetch
+
+    - name: Install htop
+      apt:
+        name: htop
+        state: present
+      tags: htop
+
+    - name: Install additional monitoring tools
+      apt:
+        name:
+          - iotop
+          - ncdu
+          - tmux
+          - lm-sensors
+          - vim
+        state: present
+      tags: tools
+
+    - name: Verify fastfetch installation
+      command: fastfetch --version
+      register: fastfetch_version
+      changed_when: false
+      tags: verify
+
+    - name: Verify htop installation
+      command: htop --version
+      register: htop_version
+      changed_when: false
+      tags: verify
+
+    - name: Display installed versions
+      debug:
+        msg:
+          - "Fastfetch: {{ fastfetch_version.stdout }}"
+          - "Htop: {{ htop_version.stdout }}"
+      tags: verify
+
+    - name: Create snippets directory for cloud-init
+      file:
+        path: /var/lib/vz/snippets
+        state: directory
+        mode: "0755"
+      tags: cloud-init
+
+    - name: Create cloud-init configuration for QEMU guest agent
+      copy:
+        content: |
+          #cloud-config
+          users:
+            - name: ubuntu
+              groups: sudo
+              shell: /bin/bash
+              sudo: ['ALL=(ALL) NOPASSWD:ALL']
+              ssh_authorized_keys:
+                - YOUR_SSH_PUBLIC_KEY_HERE
+
+          package_update: true
+          packages:
+            - qemu-guest-agent
+
+          runcmd:
+            - systemctl enable qemu-guest-agent
+            - systemctl start qemu-guest-agent
+        dest: /var/lib/vz/snippets/cloud-init-user-data.yml
+        mode: "0644"
+      tags: cloud-init

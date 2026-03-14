@@ -1,0 +1,35 @@
+# Copy this file to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars to git (it's in .gitignore)
+
+# Proxmox connection (bpg/proxmox provider)
+proxmox_api_url      = "https://192.168.100.50:8006/"
+proxmox_user         = "root@pam"
+proxmox_password     = "your-proxmox-password"
+proxmox_tls_insecure = true
+proxmox_ssh_port     = 1308  # SSH port for Proxmox host
+
+# Proxmox settings
+proxmox_node   = "pve"
+target_node    = "pve"
+storage_pool   = "local-lvm"
+network_bridge = "vmbr0"
+
+# Network settings
+gateway    = "192.168.100.1"
+nameserver = "8.8.8.8"
+
+# SSH settings
+ssh_user       = "ubuntu"
+ssh_public_key = "ssh-rsa AAAAB3... your-public-key-here"
+
+# VM configurations (optional - defaults are in variables.tf)
+# vms = {
+#   k8s-master = {
+#     cores       = 2
+#     memory      = 4096
+#     disk_size   = "50G"
+#     ip_address  = "192.168.100.201"
+#     description = "Kubernetes Master"
+#   }
+#   # ... add more VMs or modify defaults
+# }

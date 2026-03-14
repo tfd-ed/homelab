@@ -1,0 +1,332 @@
+---
+- name: Setup PostgreSQL database for n8n on database VM
+  hosts: database
+  remote_user: ubuntu
+  become: yes
+  vars:
+    n8n_db_name: n8n
+    n8n_db_user: n8n
+    n8n_db_password: "n8n_secure_password_change_me" # CHANGE THIS!
+
+  tasks:
+    - name: Check if PostgreSQL is installed
+      command: which psql
+      register: psql_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Fail if PostgreSQL is not installed
+      fail:
+        msg: "PostgreSQL is not installed. Run database-setup.yml first!"
+      when: psql_check.rc != 0
+
+    - name: Create n8n database
+      become_user: postgres
+      postgresql_db:
+        name: "{{ n8n_db_name }}"
+        encoding: UTF8
+        lc_collate: en_US.UTF-8
+        lc_ctype: en_US.UTF-8
+        template: template0
+        state: present
+
+    - name: Create n8n database user
+      become_user: postgres
+      postgresql_user:
+        name: "{{ n8n_db_user }}"
+        password: "{{ n8n_db_password }}"
+        db: "{{ n8n_db_name }}"
+        priv: ALL
+        state: present
+
+    - name: Grant all privileges on n8n database
+      become_user: postgres
+      postgresql_privs:
+        database: "{{ n8n_db_name }}"
+        privs: ALL
+        type: database
+        role: "{{ n8n_db_user }}"
+        state: present
+
+    - name: Ensure PostgreSQL allows connections from n8n VM
+      lineinfile:
+        path: /etc/postgresql/*/main/pg_hba.conf
+        line: "host    {{ n8n_db_name }}    {{ n8n_db_user }}    192.168.100.230/32    md5"
+        state: present
+      notify: Restart PostgreSQL
+
+    - name: Ensure PostgreSQL listens on all interfaces
+      lineinfile:
+        path: /etc/postgresql/*/main/postgresql.conf
+        regexp: "^#?listen_addresses"
+        line: "listen_addresses = '*'"
+        state: present
+      notify: Restart PostgreSQL
+
+  handlers:
+    - name: Restart PostgreSQL
+      systemd:
+        name: postgresql
+        state: restarted
+
+---
+- name: Setup n8n Workflow Automation on n8n VM
+  hosts: n8n
+  remote_user: ubuntu
+  become: yes
+  vars:
+    n8n_version: "latest"
+    n8n_port: 5678
+    n8n_dir: /opt/n8n
+    n8n_db_host: 192.168.100.205
+    n8n_db_port: 5432
+    n8n_db_name: n8n
+    n8n_db_user: n8n
+    n8n_db_password: "n8n_secure_password_change_me" # MUST MATCH DATABASE PASSWORD!
+    n8n_encryption_key: "change_this_to_random_string_32_chars" # CHANGE THIS! Generate with: openssl rand -hex 16
+    n8n_webhook_url: "http://192.168.100.230:5678" # Change to your domain if using reverse proxy
+    n8n_timezone: "America/Los_Angeles" # Change to your timezone
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - docker-compose
+          - python3-docker
+          - postgresql-client
+        state: present
+
+    - name: Ensure Docker is installed
+      command: which docker
+      register: docker_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Fail if Docker is not installed
+      fail:
+        msg: "Docker is not installed. Run docker-setup.yml first!"
+      when: docker_check.rc != 0
+
+    - name: Create n8n directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ n8n_dir }}"
+        - "{{ n8n_dir }}/data"
+        - "{{ n8n_dir }}/.n8n"
+
+    - name: Test database connectivity
+      command: >
+        psql -h {{ n8n_db_host }} -p {{ n8n_db_port }} 
+        -U {{ n8n_db_user }} -d {{ n8n_db_name }} -c "SELECT 1;"
+      environment:
+        PGPASSWORD: "{{ n8n_db_password }}"
+      register: db_test
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display database connection status
+      debug:
+        msg: "{{ 'Database connection successful!' if db_test.rc == 0 else 'WARNING: Cannot connect to database. Check credentials and pg_hba.conf' }}"
+
+    - name: Create n8n Docker Compose file
+      copy:
+        dest: "{{ n8n_dir }}/docker-compose.yml"
+        content: |
+          version: '3.8'
+
+          services:
+            n8n:
+              image: n8nio/n8n:{{ n8n_version }}
+              container_name: n8n
+              restart: unless-stopped
+              ports:
+                - "{{ n8n_port }}:5678"
+              environment:
+                # Database Configuration (PostgreSQL)
+                - DB_TYPE=postgresdb
+                - DB_POSTGRESDB_HOST={{ n8n_db_host }}
+                - DB_POSTGRESDB_PORT={{ n8n_db_port }}
+                - DB_POSTGRESDB_DATABASE={{ n8n_db_name }}
+                - DB_POSTGRESDB_USER={{ n8n_db_user }}
+                - DB_POSTGRESDB_PASSWORD={{ n8n_db_password }}
+                
+                # n8n Configuration
+                - N8N_HOST={{ n8n_webhook_url }}
+                - N8N_PORT=5678
+                - N8N_PROTOCOL=http
+                - WEBHOOK_URL={{ n8n_webhook_url }}/
+                
+                # Security
+                - N8N_ENCRYPTION_KEY={{ n8n_encryption_key }}
+                
+                # Timezone
+                - GENERIC_TIMEZONE={{ n8n_timezone }}
+                - TZ={{ n8n_timezone }}
+                
+                # Execution
+                - EXECUTIONS_MODE=regular
+                - EXECUTIONS_TIMEOUT=300
+                - EXECUTIONS_TIMEOUT_MAX=3600
+                
+                # Editor URL (for webhooks and external calls)
+                - N8N_EDITOR_BASE_URL={{ n8n_webhook_url }}
+                
+                # Optional: Enable basic auth (recommended for production)
+                # - N8N_BASIC_AUTH_ACTIVE=true
+                # - N8N_BASIC_AUTH_USER=admin
+                # - N8N_BASIC_AUTH_PASSWORD=changeme
+                
+                # Optional: Metrics (for Prometheus)
+                # - N8N_METRICS=true
+                # - N8N_METRICS_PREFIX=n8n_
+                
+                # Data Directory
+                - N8N_USER_FOLDER=/home/node/.n8n
+              
+              volumes:
+                - {{ n8n_dir }}/.n8n:/home/node/.n8n
+                - {{ n8n_dir }}/data:/data
+              
+              networks:
+                - n8n-network
+              
+              healthcheck:
+                test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+                start_period: 60s
+
+          networks:
+            n8n-network:
+              driver: bridge
+        mode: "0644"
+
+    - name: Create n8n environment file for reference
+      copy:
+        dest: "{{ n8n_dir }}/.env.example"
+        content: |
+          # n8n Configuration Reference
+          # Copy to .env and customize if needed
+
+          # Database
+          DB_TYPE=postgresdb
+          DB_POSTGRESDB_HOST={{ n8n_db_host }}
+          DB_POSTGRESDB_PORT={{ n8n_db_port }}
+          DB_POSTGRESDB_DATABASE={{ n8n_db_name }}
+          DB_POSTGRESDB_USER={{ n8n_db_user }}
+          DB_POSTGRESDB_PASSWORD={{ n8n_db_password }}
+
+          # Security - CHANGE THIS!
+          N8N_ENCRYPTION_KEY={{ n8n_encryption_key }}
+
+          # URLs
+          N8N_HOST={{ n8n_webhook_url }}
+          WEBHOOK_URL={{ n8n_webhook_url }}/
+
+          # Timezone
+          GENERIC_TIMEZONE={{ n8n_timezone }}
+          TZ={{ n8n_timezone }}
+        mode: "0600"
+
+    - name: Start n8n with Docker Compose
+      docker_compose:
+        project_src: "{{ n8n_dir }}"
+        state: present
+        pull: yes
+      register: n8n_start
+
+    - name: Wait for n8n to be ready
+      uri:
+        url: "http://localhost:{{ n8n_port }}/healthz"
+        method: GET
+        status_code: 200
+      register: n8n_health
+      until: n8n_health.status == 200
+      retries: 30
+      delay: 3
+      ignore_errors: yes
+
+    - name: Get n8n container status
+      command: docker ps -f name=n8n --format "{{ '{{' }}.Status{{ '}}' }}"
+      register: n8n_status
+      changed_when: false
+
+    - name: Display n8n access information
+      debug:
+        msg:
+          - "============================================"
+          - "n8n Workflow Automation Setup Complete!"
+          - "============================================"
+          - ""
+          - "Access n8n:"
+          - "  URL: http://192.168.100.230:5678"
+          - "  Status: {{ n8n_status.stdout }}"
+          - ""
+          - "First-time setup:"
+          - "  1. Open http://192.168.100.230:5678 in your browser"
+          - "  2. Create your owner account (first user)"
+          - "  3. Start building workflows!"
+          - ""
+          - "Database:"
+          - "  Type: PostgreSQL"
+          - "  Host: {{ n8n_db_host }}"
+          - "  Database: {{ n8n_db_name }}"
+          - ""
+          - "Important Security Notes:"
+          - "  ⚠ CHANGE the encryption key in {{ n8n_dir }}/docker-compose.yml"
+          - "  ⚠ CHANGE the database password"
+          - "  ⚠ Consider enabling N8N_BASIC_AUTH for additional security"
+          - "  ⚠ Set up reverse proxy with SSL for production use"
+          - ""
+          - "Configuration:"
+          - "  Directory: {{ n8n_dir }}"
+          - "  Workflows data: {{ n8n_dir }}/.n8n"
+          - "  Logs: docker logs n8n"
+          - ""
+          - "Useful Commands:"
+          - "  Start: cd {{ n8n_dir }} && docker-compose up -d"
+          - "  Stop: cd {{ n8n_dir }} && docker-compose down"
+          - "  Restart: cd {{ n8n_dir }} && docker-compose restart"
+          - "  Logs: docker logs -f n8n"
+          - "============================================"
+
+    - name: Create n8n management scripts
+      copy:
+        dest: "/usr/local/bin/{{ item.name }}"
+        content: "{{ item.content }}"
+        mode: "0755"
+      loop:
+        - name: n8n-start
+          content: |
+            #!/bin/bash
+            cd {{ n8n_dir }} && docker-compose up -d
+            echo "n8n started. Access at http://192.168.100.230:5678"
+        - name: n8n-stop
+          content: |
+            #!/bin/bash
+            cd {{ n8n_dir }} && docker-compose down
+            echo "n8n stopped"
+        - name: n8n-restart
+          content: |
+            #!/bin/bash
+            cd {{ n8n_dir }} && docker-compose restart
+            echo "n8n restarted"
+        - name: n8n-logs
+          content: |
+            #!/bin/bash
+            docker logs -f n8n
+        - name: n8n-status
+          content: |
+            #!/bin/bash
+            docker ps -f name=n8n
+            echo ""
+            curl -s http://localhost:5678/healthz && echo "✓ n8n is healthy" || echo "✗ n8n is not responding"

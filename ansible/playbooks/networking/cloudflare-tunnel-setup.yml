@@ -1,0 +1,52 @@
+---
+- name: Setup Cloudflare Tunnel
+  hosts: proxmox
+  become: true
+
+  tasks:
+    - name: Create keyrings directory
+      file:
+        path: /usr/share/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Cloudflare GPG key
+      get_url:
+        url: https://pkg.cloudflare.com/cloudflare-public-v2.gpg
+        dest: /usr/share/keyrings/cloudflare-public-v2.gpg
+        mode: "0644"
+
+    - name: Add Cloudflare repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/cloudflare-public-v2.gpg] https://pkg.cloudflare.com/cloudflared any main"
+        filename: cloudflared
+        state: present
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install cloudflared
+      apt:
+        name: cloudflared
+        state: present
+
+    - name: Verify cloudflared installation
+      command: cloudflared --version
+      register: cloudflared_version
+      changed_when: false
+
+    - name: Display cloudflared version
+      debug:
+        msg: "Cloudflared installed: {{ cloudflared_version.stdout }}"
+
+    - name: Display next steps
+      debug:
+        msg:
+          - "Cloudflared has been installed successfully!"
+          - "Next steps:"
+          - "1. Authenticate: cloudflared tunnel login"
+          - "2. Create tunnel: cloudflared tunnel create <tunnel-name>"
+          - "3. Configure tunnel: Edit /etc/cloudflared/config.yml"
+          - "4. Route DNS: cloudflared tunnel route dns <tunnel-name> <hostname>"
+          - "5. Start service: systemctl enable --now cloudflared"

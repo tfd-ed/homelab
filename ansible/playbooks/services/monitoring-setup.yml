@@ -1,0 +1,299 @@
+---
+- name: Setup Monitoring Stack (Prometheus + Grafana) on monitoring VM
+  hosts: monitoring
+  become: yes
+  gather_facts: yes
+
+  vars:
+    monitoring_dir: /opt/monitoring
+    prometheus_version: "v2.48.1"
+    grafana_version: "10.2.3"
+    prometheus_port: 9090
+    grafana_port: 3000
+    prometheus_retention: "30d"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - docker-compose
+          - python3-docker
+        state: present
+
+    - name: Create monitoring directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ monitoring_dir }}"
+        - "{{ monitoring_dir }}/prometheus"
+        - "{{ monitoring_dir }}/prometheus/data"
+        - "{{ monitoring_dir }}/grafana"
+        - "{{ monitoring_dir }}/grafana/data"
+        - "{{ monitoring_dir }}/grafana/provisioning"
+        - "{{ monitoring_dir }}/grafana/provisioning/datasources"
+        - "{{ monitoring_dir }}/grafana/provisioning/dashboards"
+        - "{{ monitoring_dir }}/grafana/dashboards"
+
+    - name: Create Prometheus configuration
+      copy:
+        dest: "{{ monitoring_dir }}/prometheus/prometheus.yml"
+        content: |
+          global:
+            scrape_interval: 15s
+            evaluation_interval: 15s
+            external_labels:
+              cluster: 'homelab'
+              environment: 'production'
+
+          scrape_configs:
+            # Prometheus itself
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+
+            # Node Exporter - Monitoring VM
+            - job_name: 'node-exporter-monitoring'
+              static_configs:
+                - targets: ['node-exporter:9100']
+                  labels:
+                    instance: 'monitoring-vm'
+
+            # K8s nodes (if node-exporter is deployed)
+            - job_name: 'k8s-nodes'
+              static_configs:
+                - targets: 
+                    - '192.168.100.201:9100'
+                    - '192.168.100.202:9100'
+                    - '192.168.100.203:9100'
+                  labels:
+                    cluster: 'k8s'
+
+            # PostgreSQL (if postgres-exporter is deployed)
+            - job_name: 'postgres'
+              static_configs:
+                - targets: ['192.168.100.205:9187']
+                  labels:
+                    instance: 'database-vm'
+
+            # Docker Registry
+            - job_name: 'docker-registry'
+              static_configs:
+                - targets: ['192.168.100.240:5000']
+                  labels:
+                    instance: 'ci-cd-vm'
+
+            # Add your application endpoints here
+            # - job_name: 'my-app'
+            #   static_configs:
+            #     - targets: ['app-host:port']
+
+          # Optional: Alerting rules
+          # rule_files:
+          #   - "alerts/*.yml"
+        mode: "0644"
+
+    - name: Create Grafana datasource configuration
+      copy:
+        dest: "{{ monitoring_dir }}/grafana/provisioning/datasources/prometheus.yml"
+        content: |
+          apiVersion: 1
+
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://prometheus:9090
+              isDefault: true
+              editable: true
+        mode: "0644"
+
+    - name: Create Grafana dashboard provisioning config
+      copy:
+        dest: "{{ monitoring_dir }}/grafana/provisioning/dashboards/default.yml"
+        content: |
+          apiVersion: 1
+
+          providers:
+            - name: 'Default'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: false
+              updateIntervalSeconds: 10
+              allowUiUpdates: true
+              options:
+                path: /etc/grafana/provisioning/dashboards
+        mode: "0644"
+
+    - name: Create Docker Compose file
+      copy:
+        dest: "{{ monitoring_dir }}/docker-compose.yml"
+        content: |
+          version: '3.8'
+
+          services:
+            prometheus:
+              image: prom/prometheus:{{ prometheus_version }}
+              container_name: prometheus
+              restart: unless-stopped
+              command:
+                - '--config.file=/etc/prometheus/prometheus.yml'
+                - '--storage.tsdb.path=/prometheus'
+                - '--storage.tsdb.retention.time={{ prometheus_retention }}'
+                - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+                - '--web.console.templates=/usr/share/prometheus/consoles'
+                - '--web.enable-lifecycle'
+              ports:
+                - "{{ prometheus_port }}:9090"
+              volumes:
+                - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+                - ./prometheus/data:/prometheus
+              networks:
+                - monitoring
+
+            grafana:
+              image: grafana/grafana:{{ grafana_version }}
+              container_name: grafana
+              restart: unless-stopped
+              ports:
+                - "{{ grafana_port }}:3000"
+              environment:
+                - GF_SECURITY_ADMIN_USER=admin
+                - GF_SECURITY_ADMIN_PASSWORD=admin
+                - GF_INSTALL_PLUGINS=grafana-piechart-panel
+                - GF_SERVER_ROOT_URL=http://monitoring.homelab.local:3000
+              volumes:
+                - ./grafana/data:/var/lib/grafana
+                - ./grafana/dashboards:/var/lib/grafana/dashboards
+                - ./grafana/provisioning:/etc/grafana/provisioning
+              networks:
+                - monitoring
+              depends_on:
+                - prometheus
+
+            node-exporter:
+              image: prom/node-exporter:latest
+              container_name: node-exporter
+              restart: unless-stopped
+              command:
+                - '--path.procfs=/host/proc'
+                - '--path.sysfs=/host/sys'
+                - '--path.rootfs=/host'
+                - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+              ports:
+                - "9100:9100"
+              volumes:
+                - /proc:/host/proc:ro
+                - /sys:/host/sys:ro
+                - /:/host:ro,rslave
+              networks:
+                - monitoring
+
+          networks:
+            monitoring:
+              driver: bridge
+        mode: "0644"
+
+    - name: Set proper permissions for data directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "65534" # nobody user for prometheus
+        group: "65534"
+        recurse: yes
+      loop:
+        - "{{ monitoring_dir }}/prometheus/data"
+
+    - name: Set Grafana data directory permissions
+      file:
+        path: "{{ monitoring_dir }}/grafana/data"
+        state: directory
+        owner: "472" # grafana user
+        group: "472"
+        recurse: yes
+
+    - name: Check if monitoring stack is running
+      shell: docker ps --filter "name=prometheus" --format {% raw %}"{{.Names}}"{% endraw %}
+      register: monitoring_running
+      changed_when: false
+      failed_when: false
+
+    - name: Stop monitoring stack if running (for updates)
+      shell: docker-compose down
+      args:
+        chdir: "{{ monitoring_dir }}"
+      when: monitoring_running.stdout | length > 0
+      ignore_errors: yes
+
+    - name: Start monitoring stack with Docker Compose
+      shell: docker-compose up -d
+      args:
+        chdir: "{{ monitoring_dir }}"
+
+    - name: Wait for Prometheus to be ready
+      uri:
+        url: "http://localhost:{{ prometheus_port }}/-/ready"
+        status_code: 200
+      register: prometheus_status
+      until: prometheus_status.status == 200
+      retries: 10
+      delay: 5
+
+    - name: Wait for Grafana to be ready
+      uri:
+        url: "http://localhost:{{ grafana_port }}/api/health"
+        status_code: 200
+      register: grafana_status
+      until: grafana_status.status == 200
+      retries: 10
+      delay: 5
+
+    - name: Get container status
+      shell: docker-compose ps
+      args:
+        chdir: "{{ monitoring_dir }}"
+      register: containers_status
+      changed_when: false
+
+    - name: Display monitoring URLs
+      debug:
+        msg:
+          - "===== Monitoring Stack Deployed Successfully ====="
+          - ""
+          - "Prometheus:"
+          - "  - URL: http://192.168.100.220:{{ prometheus_port }}"
+          - "  - Status: http://192.168.100.220:{{ prometheus_port }}/targets"
+          - "  - Config: {{ monitoring_dir }}/prometheus/prometheus.yml"
+          - "  - Data retention: {{ prometheus_retention }}"
+          - ""
+          - "Grafana:"
+          - "  - URL: http://192.168.100.220:{{ grafana_port }}"
+          - "  - Username: admin"
+          - "  - Password: admin (CHANGE THIS!)"
+          - "  - Datasource: Prometheus (pre-configured)"
+          - ""
+          - "Node Exporter:"
+          - "  - Monitoring VM metrics: http://192.168.100.220:9100/metrics"
+          - ""
+          - "Next Steps:"
+          - "  1. Access Grafana and change admin password"
+          - "  2. Import dashboards (recommended: 1860, 3662, 11074)"
+          - "  3. Deploy node-exporter on other VMs for full monitoring"
+          - "  4. Configure alerting in Prometheus"
+          - ""
+          - "Container Status:"
+          - "{{ containers_status.stdout_lines }}"
+          - ""
+          - "To manage the stack:"
+          - "  cd {{ monitoring_dir }}"
+          - "  docker-compose logs -f        # View logs"
+          - "  docker-compose restart        # Restart all"
+          - "  docker-compose down          # Stop all"
+          - "  docker-compose up -d         # Start all"
