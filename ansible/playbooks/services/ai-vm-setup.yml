@@ -9,10 +9,6 @@
     ollama_data_dir: /opt/ollama
 
   tasks:
-    - name: Wait for VM to be reachable via SSH
-      wait_for_connection:
-        timeout: 180
-        delay: 10
 
     - name: Update apt cache
       apt:
@@ -67,13 +63,62 @@
         port: "{{ ollama_port }}"
         timeout: 30
 
-    - name: Pull TinyLlama model
-      command: ollama pull {{ ollama_model }}
-      become: no
+    - name: Check if model already exists
+      shell: ollama list 2>&1 | grep -i "{{ ollama_model }}"
       environment:
         OLLAMA_HOST: "http://localhost:{{ ollama_port }}"
+        OLLAMA_MODELS: "{{ ollama_data_dir }}/models"
+        HOME: /home/ollama
+      register: model_check
+      changed_when: false
+      failed_when: false
+
+    - name: Pull TinyLlama model (this may take a few minutes)
+      shell: ollama pull {{ ollama_model }} 2>&1
+      environment:
+        OLLAMA_HOST: "http://localhost:{{ ollama_port }}"
+        OLLAMA_MODELS: "{{ ollama_data_dir }}/models"
+        HOME: /home/ollama
       register: pull_result
-      changed_when: "'already up to date' not in pull_result.stdout"
+      changed_when: true
+      timeout: 600
+      when: model_check.rc != 0
+
+    - name: Verify model is listed
+      shell: ollama list
+      environment:
+        OLLAMA_HOST: "http://localhost:{{ ollama_port }}"
+        OLLAMA_MODELS: "{{ ollama_data_dir }}/models"
+        HOME: /home/ollama
+      register: model_list
+      changed_when: false
+
+    - name: Show available models
+      debug:
+        msg: "{{ model_list.stdout_lines }}"
+
+    - name: Smoke test - run a quick inference
+      shell: >
+        ollama run {{ ollama_model }} "reply with only: ok" 2>&1
+      environment:
+        OLLAMA_HOST: "http://localhost:{{ ollama_port }}"
+        OLLAMA_MODELS: "{{ ollama_data_dir }}/models"
+        HOME: /home/ollama
+      register: smoke_test
+      changed_when: false
+      timeout: 120
+
+    - name: Show smoke test result
+      debug:
+        msg: "{{ smoke_test.stdout_lines }}"
+
+    - name: Print access info
+      debug:
+        msg:
+          - "Ollama is running on http://{{ ansible_host }}:{{ ollama_port }}"
+          - "From n8n VM, use: http://192.168.100.250:{{ ollama_port }}"
+          - "API endpoint: POST http://192.168.100.250:{{ ollama_port
+            }}/api/generate"
 
   handlers:
     - name: Restart Ollama
