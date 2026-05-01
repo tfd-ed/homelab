@@ -7,6 +7,7 @@ Note that this project is not intended for heavy production workloads. In Cambod
 ## YouTube Video
 I intended to release YouTube videos docummenting this journey. 
 - [1st Video: ខ្ញុំលែងប្រើ Cloud ហើយធ្វើ HomeLab Server មួយខ្លួនឯង | Moving from Cloud to Home Lab](https://youtu.be/VtUXaHL9B6Q?si=FgUlQjMOOWyEZPOM)
+- [2nd Video: ហេតុអ្វីខ្ញុំប្រើ Self-Hosted Runner ដើម្បីដាក់ Project លើ HomeLab ](https://www.youtube.com/watch?v=YuvwrEfzgvs)
 
 ## Architecture Overview
 <img src="diagram/homelab-architecture-logos.png" alt="Infrastructure Architecture Diagram" width="800" align="center"/>
