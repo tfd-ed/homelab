@@ -64,6 +64,7 @@ resource "proxmox_virtual_environment_vm" "vms" {
   lifecycle {
     ignore_changes = [
       network_device,
+      initialization,
     ]
   }
 }

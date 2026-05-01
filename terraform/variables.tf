@@ -83,14 +83,14 @@ variable "vms" {
     }
     k8s-worker-1 = {
       cores       = 6
-      memory      = 14336
+      memory      = 10240
       disk_size   = "150G"
       ip_address  = "192.168.100.202"
       description = "Kubernetes Worker 1 - Runs apps/containers"
     }
     k8s-worker-2 = {
       cores       = 6
-      memory      = 14336
+      memory      = 10240
       disk_size   = "150G"
       ip_address  = "192.168.100.203"
       description = "Kubernetes Worker 2 - Runs apps/containers"
@@ -118,7 +118,7 @@ variable "vms" {
     }
     n8n = {
       cores       = 2
-      memory      = 6144
+      memory      = 4096
       disk_size   = "50G"
       ip_address  = "192.168.100.230"
       description = "n8n Automation - Workflows and automation"
@@ -129,6 +129,13 @@ variable "vms" {
       disk_size   = "100G"
       ip_address  = "192.168.100.240"
       description = "CI/CD - GitHub/GitLab runner"
+    }
+    ai-vm = {
+      cores       = 4
+      memory      = 6144
+      disk_size   = "20G"
+      ip_address  = "192.168.100.250"
+      description = "AI VM - TinyLlama 1.1B via Ollama"
     }
   }
 }

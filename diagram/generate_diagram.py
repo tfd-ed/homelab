@@ -60,8 +60,8 @@ with Diagram(
         # Kubernetes Cluster
         with Cluster("Kubernetes Cluster"):
             k8s_master = Custom("k8s-master\n2C | 4GB\nControl Plane", "./assets/k8s.png")
-            k8s_worker1 = Custom("k8s-worker-1\n4C | 14GB\nWorkloads", "./assets/k8s.png")
-            k8s_worker2 = Custom("k8s-worker-2\n4C | 14GB\nWorkloads", "./assets/k8s.png")
+            k8s_worker1 = Custom("k8s-worker-1\n6C | 10GB\nWorkloads", "./assets/k8s.png")
+            k8s_worker2 = Custom("k8s-worker-2\n6C | 10GB\nWorkloads", "./assets/k8s.png")
         
         # Database VM
         with Cluster("Database Server"):
@@ -71,8 +71,9 @@ with Diagram(
         with Cluster("Service VMs"):
             monitoring = Custom("monitoring\n2C | 6GB\nPrometheus + Grafana", "./assets/prometheus-grafana.png")
             
-            n8n = Custom("n8n\n2C | 6GB\nAutomation", "./assets/n9n.png")
-            cicd = GithubActions("ci-cd\n2C | 5GB\nCI/CD")
+            n8n = Custom("n8n\n2C | 4GB\nAutomation", "./assets/n9n.png")
+            cicd = GithubActions("ci-cd\n4C | 8GB\nCI/CD")
+            aivm = Server("ai-vm\n4C | 6GB\nOllama + TinyLlama")
     
     # SSH Access Flow (Blue - dotted)
     user >> Edge(label="SSH", color="blue", style="solid") >> cf_ssh
@@ -86,6 +87,7 @@ with Diagram(
     hypervisor >> Edge(label="ProxyJump", color="blue", style="dotted") >> monitoring
     hypervisor >> Edge(label="ProxyJump", color="blue", style="dotted") >> n8n
     hypervisor >> Edge(label="ProxyJump", color="blue", style="dotted") >> cicd
+    hypervisor >> Edge(label="ProxyJump", color="blue", style="dotted") >> aivm
     
     # Web Service Access Flow (Purple - solid)
     user >> Edge(label="HTTPS", color="purple", style="solid") >> cf_web
@@ -101,5 +103,6 @@ with Diagram(
     k8s_worker2 >> Edge(label="DB", color="green", style="dashed") >> database
     n8n >> Edge(label="DB", color="green", style="dashed") >> database
     monitoring >> Edge(label="DB", color="green", style="dashed") >> database
+    n8n >> Edge(label="LLM API", color="orange", style="dashed") >> aivm
 
 print("✅ Diagram generated: homelab-architecture-logos.png")

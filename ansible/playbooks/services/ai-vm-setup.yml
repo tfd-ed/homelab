@@ -1,0 +1,83 @@
+---
+- name: Setup AI VM with Ollama and TinyLlama
+  hosts: ai-vm
+  become: yes
+  gather_facts: yes
+  vars:
+    ollama_model: tinyllama
+    ollama_port: 11434
+    ollama_data_dir: /opt/ollama
+
+  tasks:
+    - name: Wait for VM to be reachable via SSH
+      wait_for_connection:
+        timeout: 180
+        delay: 10
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - ca-certificates
+        state: present
+
+    - name: Install Ollama
+      shell: curl -fsSL https://ollama.com/install.sh | sh
+      args:
+        creates: /usr/local/bin/ollama
+
+    - name: Create Ollama data directory
+      file:
+        path: "{{ ollama_data_dir }}"
+        state: directory
+        owner: ollama
+        group: ollama
+        mode: "0755"
+
+    - name: Configure Ollama service override
+      file:
+        path: /etc/systemd/system/ollama.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Set Ollama environment config
+      copy:
+        dest: /etc/systemd/system/ollama.service.d/override.conf
+        content: |
+          [Service]
+          Environment="OLLAMA_MODELS={{ ollama_data_dir }}/models"
+          Environment="OLLAMA_HOST=0.0.0.0:{{ ollama_port }}"
+        mode: "0644"
+      notify: Restart Ollama
+
+    - name: Reload systemd and enable Ollama
+      systemd:
+        name: ollama
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Wait for Ollama to be ready
+      wait_for:
+        port: "{{ ollama_port }}"
+        timeout: 30
+
+    - name: Pull TinyLlama model
+      command: ollama pull {{ ollama_model }}
+      become: no
+      environment:
+        OLLAMA_HOST: "http://localhost:{{ ollama_port }}"
+      register: pull_result
+      changed_when: "'already up to date' not in pull_result.stdout"
+
+  handlers:
+    - name: Restart Ollama
+      systemd:
+        name: ollama
+        state: restarted
+        daemon_reload: yes

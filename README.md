@@ -71,24 +71,25 @@ This homelab runs on Proxmox VE and uses Infrastructure as Code (Terraform + Ans
 
 | VM | IP | CPU | RAM | Disk | Purpose |
 |---|---|---|---|---|---|
-| k8s-master | 192.168.100.201 | 2 | 4 GB | 50 GB | Kubernetes control plane (K3s) | 
-| k8s-worker-1 | 192.168.100.202 | 6 | 14 GB | 150 GB | Kubernetes worker node |
-| k8s-worker-2 | 192.168.100.203 | 6 | 14 GB | 150 GB | Kubernetes worker node | 
+| k8s-master | 192.168.100.201 | 2 | 4 GB | 50 GB | Kubernetes control plane (K3s) |
+| k8s-worker-1 | 192.168.100.202 | 6 | 10 GB | 150 GB | Kubernetes worker node |
+| k8s-worker-2 | 192.168.100.203 | 6 | 10 GB | 150 GB | Kubernetes worker node |
 | database-vm | 192.168.100.205 | 4 | 6 GB | 200 GB | Centralized database server |
 | app-gateway | 192.168.100.210 | 2 | 2 GB | 20 GB | Nginx reverse proxy |
-| monitoring | 192.168.100.220 | 2 | 6 GB | 80 GB | Prometheus, Grafana, Loki | 
-| n8n | 192.168.100.230 | 2 | 6 GB | 50 GB | n8n workflow automation | ✅ Adequate |
+| monitoring | 192.168.100.220 | 2 | 6 GB | 80 GB | Prometheus, Grafana, Loki |
+| n8n | 192.168.100.230 | 2 | 4 GB | 50 GB | n8n workflow automation |
 | ci-cd | 192.168.100.240 | 4 | 8 GB | 100 GB | GitHub Actions + Docker registry |
+| ai-vm | 192.168.100.250 | 4 | 6 GB | 20 GB | Ollama + TinyLlama 1.1B |
 
-**Total Resources:** 28 CPU cores, 57 GB RAM, 820 GB storage  
-**Available for Host:** 4 GB RAM (10.9%), ~180 GB storage
+**Total Resources:** 32 CPU cores, 56 GB RAM, 820 GB storage  
+**Available for Host:** ~8 GB RAM (~12.5%), ~180 GB storage
 
 **Resource Allocation Notes:**
-- All VMs have adequate resources for their intended workloads
-- CI/CD VM may require additional RAM (8GB+) for heavy Docker builds
-- 7GB RAM reserved for Proxmox host ensures system stability
+- k8s workers reduced to 10 GB each to make room for AI VM
+- n8n reduced to 4 GB (sufficient for workflow automation)
+- ai-vm runs Ollama with TinyLlama 1.1B — lightweight LLM inference
+- ~8 GB reserved for Proxmox host ensures stable headroom
 - Storage allocation allows for data growth and logs
-- Balanced allocation prevents resource contention
 
 ## 📂 Repository Structure
 
@@ -270,6 +271,30 @@ This will install Prometheus, Grafana, and Loki on the monitoring VM and configu
 cd ansible
 ansible-playbook playbooks/services/monitoring-setup.yml
 ansible-playbook playbooks/services/monitoring-dashboards-setup.yml
+```
+
+## 8. Setup AI VM (Ollama + TinyLlama)
+
+The AI VM runs [Ollama](https://ollama.com) with the TinyLlama 1.1B model for lightweight on-premise LLM inference.
+
+```bash
+./script/run-ai-vm-setup.sh
+```
+
+This playbook will:
+- Install Ollama runtime
+- Configure it to listen on `0.0.0.0:11434` (LAN-accessible)
+- Pull the `tinyllama` model automatically
+
+**Verify:**
+```bash
+curl http://192.168.100.250:11434/api/generate \
+  -d '{"model":"tinyllama","prompt":"Hello, what can you do?","stream":false}'
+```
+
+**List available models:**
+```bash
+curl http://192.168.100.250:11434/api/tags
 ```
 
 ## Operations & Quick Reference
