@@ -71,16 +71,16 @@ This homelab runs on Proxmox VE and uses Infrastructure as Code (Terraform + Ans
 | VM | IP | CPU | RAM | Disk | Purpose |
 |---|---|---|---|---|---|
 | k8s-master | 192.168.100.201 | 2 | 4 GB | 50 GB | Kubernetes control plane (K3s) | 
-| k8s-worker-1 | 192.168.100.202 | 4 | 14 GB | 150 GB | Kubernetes worker node |
-| k8s-worker-2 | 192.168.100.203 | 4 | 14 GB | 150 GB | Kubernetes worker node | 
+| k8s-worker-1 | 192.168.100.202 | 6 | 14 GB | 150 GB | Kubernetes worker node |
+| k8s-worker-2 | 192.168.100.203 | 6 | 14 GB | 150 GB | Kubernetes worker node | 
 | database-vm | 192.168.100.205 | 4 | 6 GB | 200 GB | Centralized database server |
 | app-gateway | 192.168.100.210 | 2 | 2 GB | 20 GB | Nginx reverse proxy |
 | monitoring | 192.168.100.220 | 2 | 6 GB | 80 GB | Prometheus, Grafana, Loki | 
 | n8n | 192.168.100.230 | 2 | 6 GB | 50 GB | n8n workflow automation | ✅ Adequate |
-| ci-cd | 192.168.100.240 | 2 | 5 GB | 100 GB | GitHub Actions + Docker registry |
+| ci-cd | 192.168.100.240 | 4 | 8 GB | 100 GB | GitHub Actions + Docker registry |
 
-**Total Resources:** 21 CPU cores, 57 GB RAM, 820 GB storage  
-**Available for Host:** 3 cores (37.5%), 7 GB RAM (10.9%), ~180 GB storage
+**Total Resources:** 28 CPU cores, 57 GB RAM, 820 GB storage  
+**Available for Host:** 4 GB RAM (10.9%), ~180 GB storage
 
 **Resource Allocation Notes:**
 - All VMs have adequate resources for their intended workloads

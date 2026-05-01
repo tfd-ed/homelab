@@ -42,6 +42,42 @@ export KUBECONFIG=/path/to/homelab-journey/kubeconfig
 - **Worker-2:** 192.168.100.203 (4 CPU, 14GB RAM)
 - **Registry:** registry.homelab.local → 192.168.100.240:5000
 
+### k8s-dashboard-setup.yml
+**Purpose:** Install Kubernetes Dashboard on K8s cluster  
+**Target:** k8s-master  
+**Usage:** `./script/run-k8s-dashboard-setup.sh` or `ansible-playbook playbooks/kubernetes/k8s-dashboard-setup.yml`
+
+**Features:**
+- Kubernetes Dashboard v2.7.0
+- Admin service account with cluster-admin access
+- Token-based authentication
+- NodePort service (port 30443)
+- Automatic token generation and saving
+
+**Access Methods:**
+1. **SSH Tunnel (recommended for remote access):**
+   ```bash
+   ./script/dashboard-tunnel.sh
+   # Visit: https://localhost:8443
+   ```
+
+2. **Direct NodePort (local network only):**
+   ```bash
+   # Visit: https://192.168.100.201:30443
+   ```
+
+3. **kubectl proxy (if you have kubeconfig):**
+   ```bash
+   export KUBECONFIG=./kubeconfig
+   kubectl proxy
+   # Visit: http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy/
+   ```
+
+**Authentication:**
+- Token saved to: `k8s-dashboard-token.txt` (root directory)
+- Also available on master: `/root/dashboard-admin-token.txt`
+- Regenerate token: `kubectl -n kubernetes-dashboard create token dashboard-admin`
+
 ## Pre-requisites
 
 Before running:

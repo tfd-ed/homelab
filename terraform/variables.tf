@@ -82,14 +82,14 @@ variable "vms" {
       description = "Kubernetes Master - API server, scheduler, controller"
     }
     k8s-worker-1 = {
-      cores       = 4
+      cores       = 6
       memory      = 14336
       disk_size   = "150G"
       ip_address  = "192.168.100.202"
       description = "Kubernetes Worker 1 - Runs apps/containers"
     }
     k8s-worker-2 = {
-      cores       = 4
+      cores       = 6
       memory      = 14336
       disk_size   = "150G"
       ip_address  = "192.168.100.203"
@@ -124,8 +124,8 @@ variable "vms" {
       description = "n8n Automation - Workflows and automation"
     }
     ci-cd = {
-      cores       = 2
-      memory      = 5120
+      cores       = 4
+      memory      = 8192
       disk_size   = "100G"
       ip_address  = "192.168.100.240"
       description = "CI/CD - GitHub/GitLab runner"

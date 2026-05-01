@@ -12,6 +12,10 @@ echo -e "${BLUE}n8n Workflow Automation Setup${NC}"
 echo -e "${BLUE}=========================================${NC}"
 echo ""
 
+# Change to project root if running from script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
 N8N_VM="192.168.100.230"
 DB_VM="192.168.100.205"
 
@@ -82,6 +86,19 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     echo -e "${YELLOW}Please update the passwords in ansible/playbooks/services/n8n-setup.yml first${NC}"
     echo "Then run this script again"
     exit 1
+fi
+echo ""
+
+# Load .env file if present
+ENV_FILE="$SCRIPT_DIR/../ansible/.env"
+if [ -f "$ENV_FILE" ]; then
+    echo -e "${GREEN}✓ Loading environment variables from ansible/.env${NC}"
+    set -a
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+    set +a
+else
+    echo -e "${YELLOW}⚠ No ansible/.env file found. POSTGRES_PASSWORD may not be set.${NC}"
 fi
 echo ""
 

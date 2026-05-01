@@ -128,3 +128,4 @@ grafana/data/
 *.exe
 *.o
 *.so
+ansible/k8s-dashboard-token.txt

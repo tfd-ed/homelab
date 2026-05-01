@@ -41,6 +41,10 @@ fi
 echo -e "${GREEN}✓ Docker is installed${NC}"
 echo ""
 
+# Change to project root if running from script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
 # Run the monitoring setup playbook
 echo -e "${YELLOW}Deploying Prometheus + Grafana monitoring stack...${NC}"
 cd ansible

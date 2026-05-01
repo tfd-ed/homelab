@@ -1,0 +1,206 @@
+---
+- name: Install Kubernetes Dashboard on K8s Master
+  hosts: k8s-master
+  become: yes
+  gather_facts: yes
+
+  vars:
+    dashboard_version: "v2.7.0"
+    dashboard_namespace: "kubernetes-dashboard"
+    dashboard_admin_user: "dashboard-admin"
+    kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
+
+  tasks:
+    - name: Wait for K3s to be ready
+      wait_for:
+        path: "{{ kubeconfig_path }}"
+        state: present
+        timeout: 60
+
+    - name: Check if dashboard is already installed
+      shell: kubectl get namespace {{ dashboard_namespace }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: dashboard_check
+      changed_when: false
+      failed_when: false
+
+    - name: Download Kubernetes Dashboard manifest
+      get_url:
+        url: "https://raw.githubusercontent.com/kubernetes/dashboard/{{ dashboard_version }}/aio/deploy/recommended.yaml"
+        dest: /tmp/kubernetes-dashboard.yaml
+        mode: "0644"
+      when: dashboard_check.rc != 0
+
+    - name: Install Kubernetes Dashboard
+      shell: kubectl apply -f /tmp/kubernetes-dashboard.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: dashboard_check.rc != 0
+      register: dashboard_install
+
+    - name: Wait for dashboard deployment to be ready
+      shell: kubectl wait --for=condition=Available deployment/kubernetes-dashboard -n {{ dashboard_namespace }} --timeout=300s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      retries: 3
+      delay: 10
+      register: result
+      until: result.rc == 0
+
+    - name: Create dashboard admin service account
+      shell: |
+        kubectl create serviceaccount {{ dashboard_admin_user }} -n {{ dashboard_namespace }} || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Create cluster role binding for dashboard admin
+      shell: |
+        kubectl create clusterrolebinding {{ dashboard_admin_user }} \
+          --clusterrole=cluster-admin \
+          --serviceaccount={{ dashboard_namespace }}:{{ dashboard_admin_user }} || true
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Create dashboard admin token secret
+      copy:
+        dest: /tmp/dashboard-admin-secret.yaml
+        content: |
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: {{ dashboard_admin_user }}-token
+            namespace: {{ dashboard_namespace }}
+            annotations:
+              kubernetes.io/service-account.name: {{ dashboard_admin_user }}
+          type: kubernetes.io/service-account-token
+        mode: "0644"
+
+    - name: Apply dashboard admin token secret
+      shell: kubectl apply -f /tmp/dashboard-admin-secret.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: secret_apply
+
+    - name: Wait for token to be generated
+      pause:
+        seconds: 5
+
+    - name: Get dashboard admin token
+      shell: |
+        kubectl get secret {{ dashboard_admin_user }}-token -n {{ dashboard_namespace }} -o jsonpath='{.data.token}' | base64 -d
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: dashboard_token
+      changed_when: false
+
+    - name: Save token to file
+      copy:
+        content: "{{ dashboard_token.stdout }}"
+        dest: /root/dashboard-admin-token.txt
+        mode: "0600"
+
+    - name: Create NodePort service for external access (optional)
+      copy:
+        dest: /tmp/dashboard-nodeport.yaml
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: kubernetes-dashboard-nodeport
+            namespace: {{ dashboard_namespace }}
+          spec:
+            type: NodePort
+            selector:
+              k8s-app: kubernetes-dashboard
+            ports:
+              - protocol: TCP
+                port: 443
+                targetPort: 8443
+                nodePort: 30443
+        mode: "0644"
+
+    - name: Apply NodePort service
+      shell: kubectl apply -f /tmp/dashboard-nodeport.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Get dashboard service details
+      shell: kubectl get svc -n {{ dashboard_namespace }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: dashboard_services
+      changed_when: false
+
+    - name: Display dashboard access information
+      debug:
+        msg:
+          - "===== Kubernetes Dashboard Installed Successfully ====="
+          - ""
+          - "Access Methods:"
+          - ""
+          - "1. kubectl proxy (from local machine with kubeconfig):"
+          - "   kubectl proxy"
+          - "   URL: http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy/"
+          - ""
+          - "2. Port Forward (from local machine):"
+          - "   kubectl port-forward -n kubernetes-dashboard service/kubernetes-dashboard 8443:443"
+          - "   URL: https://localhost:8443"
+          - ""
+          - "3. NodePort (direct access on local network):"
+          - "   URL: https://192.168.100.201:30443"
+          - "   Note: Accept the self-signed certificate warning"
+          - ""
+          - "4. SSH Tunnel (for remote access):"
+          - "   ssh -L 8443:localhost:30443 -i ssh-keys/vm-key ubuntu@192.168.100.201"
+          - "   URL: https://localhost:8443"
+          - ""
+          - "Authentication Token:"
+          - "   Token saved to: /root/dashboard-admin-token.txt on k8s-master"
+          - "   Token: {{ dashboard_token.stdout[:50] }}..."
+          - ""
+          - "To retrieve the full token later, run on k8s-master:"
+          - "   cat /root/dashboard-admin-token.txt"
+          - ""
+          - "Or generate a new token:"
+          - "   kubectl -n {{ dashboard_namespace }} create token {{ dashboard_admin_user }}"
+          - ""
+          - "Services:"
+          - "{{ dashboard_services.stdout_lines }}"
+          - ""
+          - "Next Steps:"
+          - "  1. Access dashboard using one of the methods above"
+          - "  2. Select 'Token' authentication method"
+          - "  3. Paste the token from /root/dashboard-admin-token.txt"
+          - "  4. For remote access, consider setting up Cloudflare Tunnel"
+
+    - name: Copy token to local machine
+      fetch:
+        src: /root/dashboard-admin-token.txt
+        dest: "{{ playbook_dir }}/../../k8s-dashboard-token.txt"
+        flat: yes
+      ignore_errors: yes
+
+    - name: Create convenience script for SSH tunnel
+      copy:
+        dest: /tmp/dashboard-tunnel.sh
+        content: |
+          #!/bin/bash
+          echo "Creating SSH tunnel to Kubernetes Dashboard..."
+          echo "Dashboard will be available at: https://localhost:8443"
+          echo "Press Ctrl+C to stop the tunnel"
+          ssh -L 8443:localhost:30443 -i {{ playbook_dir }}/../../ssh-keys/vm-key ubuntu@192.168.100.201
+        mode: "0755"
+
+    - name: Fetch convenience script
+      fetch:
+        src: /tmp/dashboard-tunnel.sh
+        dest: "{{ playbook_dir }}/../../script/dashboard-tunnel.sh"
+        flat: yes
+      ignore_errors: yes
+
+  handlers:
+    - name: Restart K3s
+      systemd:
+        name: k3s
+        state: restarted

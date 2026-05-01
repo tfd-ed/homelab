@@ -6,10 +6,21 @@
     postgres_version: "16"
     mysql_version: "8.4"
     mongo_version: "8.2"
+    redis_version: "8.2.1"
+    minio_version: "latest"
     # Default passwords - CHANGE THESE IN PRODUCTION
-    postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') | default('changeme_postgres', true) }}"
-    mysql_root_password: "{{ lookup('ansible.builtin.env', 'MYSQL_ROOT_PASSWORD') | default('changeme_mysql', true) }}"
-    mongo_root_password: "{{ lookup('ansible.builtin.env', 'MONGO_ROOT_PASSWORD') | default('changeme_mongo', true) }}"
+    postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') |
+      default('changeme_postgres', true) }}"
+    mysql_root_password: "{{ lookup('ansible.builtin.env', 'MYSQL_ROOT_PASSWORD') |
+      default('changeme_mysql', true) }}"
+    mongo_root_password: "{{ lookup('ansible.builtin.env', 'MONGO_ROOT_PASSWORD') |
+      default('changeme_mongo', true) }}"
+    redis_password: "{{ lookup('ansible.builtin.env', 'REDIS_PASSWORD') |
+      default('changeme_redis', true) }}"
+    minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') |
+      default('minioadmin', true) }}"
+    minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') |
+      default('changeme_minio', true) }}"
 
   tasks:
     - name: Update apt cache
@@ -27,6 +38,7 @@
           - lsb-release
           - software-properties-common
           - python3-pip
+          - postgresql-client
         state: present
 
     - name: Create database directories
@@ -39,6 +51,8 @@
         - /opt/databases/postgres/data
         - /opt/databases/mysql/data
         - /opt/databases/mongo/data
+        - /opt/databases/redis/data
+        - /opt/databases/minio/data
         - /opt/databases/backups
 
     - name: Create Docker network for databases
@@ -64,7 +78,7 @@
         networks:
           - name: db_network
         healthcheck:
-          test: ["CMD-SHELL", "pg_isready -U postgres"]
+          test: [ "CMD-SHELL", "pg_isready -U postgres" ]
           interval: 10s
           timeout: 5s
           retries: 5
@@ -84,7 +98,7 @@
         networks:
           - name: db_network
         healthcheck:
-          test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+          test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
           interval: 10s
           timeout: 5s
           retries: 5
@@ -105,10 +119,54 @@
         networks:
           - name: db_network
         healthcheck:
-          test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+          test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
           interval: 10s
           timeout: 5s
           retries: 5
+
+    - name: Deploy Redis container
+      docker_container:
+        name: redis
+        image: "redis:{{ redis_version }}-alpine"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "6379:6379"
+        command: >
+          redis-server --requirepass {{ redis_password }} --appendonly yes
+          --appendfsync everysec
+        volumes:
+          - /opt/databases/redis/data:/data
+        networks:
+          - name: db_network
+        healthcheck:
+          test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
+    - name: Deploy MinIO container
+      docker_container:
+        name: minio
+        image: "minio/minio:{{ minio_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "9000:9000"
+          - "9001:9001"
+        env:
+          MINIO_ROOT_USER: "{{ minio_root_user }}"
+          MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+        command: server /data --console-address ":9001"
+        volumes:
+          - /opt/databases/minio/data:/data
+        networks:
+          - name: db_network
+        healthcheck:
+          test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+          interval: 30s
+          timeout: 20s
+          retries: 3
 
     - name: Create backup script
       copy:
@@ -132,6 +190,14 @@
           docker exec mongodb rm -rf /tmp/backup
           tar -czf "${BACKUP_DIR}/mongodb_${DATE}.tar.gz" -C "${BACKUP_DIR}" "mongodb_${DATE}"
           rm -rf "${BACKUP_DIR}/mongodb_${DATE}"
+
+          # Redis Backup
+          docker exec redis redis-cli -a {{ redis_password }} --rdb "${BACKUP_DIR}/redis_${DATE}.rdb" BGSAVE
+          sleep 5
+          docker cp redis:/data/dump.rdb "${BACKUP_DIR}/redis_${DATE}.rdb"
+
+          # MinIO Backup (metadata and config)
+          tar -czf "${BACKUP_DIR}/minio_${DATE}.tar.gz" -C /opt/databases/minio/data .minio.sys
 
           # Keep only last 7 days of backups
           find "${BACKUP_DIR}" -type f -mtime +7 -delete
@@ -170,6 +236,30 @@
         comment: "MongoDB"
       when: ansible_facts.services['ufw'] is defined
 
+    - name: Configure UFW - Allow Redis
+      ufw:
+        rule: allow
+        port: "6379"
+        proto: tcp
+        comment: "Redis"
+      when: ansible_facts.services['ufw'] is defined
+
+    - name: Configure UFW - Allow MinIO API
+      ufw:
+        rule: allow
+        port: "9000"
+        proto: tcp
+        comment: "MinIO API"
+      when: ansible_facts.services['ufw'] is defined
+
+    - name: Configure UFW - Allow MinIO Console
+      ufw:
+        rule: allow
+        port: "9001"
+        proto: tcp
+        comment: "MinIO Console"
+      when: ansible_facts.services['ufw'] is defined
+
     - name: Display database connection information
       debug:
         msg:
@@ -188,9 +278,20 @@
           - "  User: admin"
           - "  Password: {{ mongo_root_password }}"
           - ""
+          - "Redis: {{ ansible_host }}:6379"
+          - "  Password: {{ redis_password }}"
+          - ""
+          - "MinIO S3: {{ ansible_host }}:9000"
+          - "MinIO Console: http://{{ ansible_host }}:9001"
+          - "  User: {{ minio_root_user }}"
+          - "  Password: {{ minio_root_password }}"
+          - ""
           - "⚠️  IMPORTANT: Change default passwords in production!"
           - "⚠️  Set environment variables before running:"
           - "   export POSTGRES_PASSWORD=your_secure_password"
           - "   export MYSQL_ROOT_PASSWORD=your_secure_password"
           - "   export MONGO_ROOT_PASSWORD=your_secure_password"
+          - "   export REDIS_PASSWORD=your_secure_password"
+          - "   export MINIO_ROOT_USER=your_admin_username"
+          - "   export MINIO_ROOT_PASSWORD=your_secure_password"
           - "==================================================="

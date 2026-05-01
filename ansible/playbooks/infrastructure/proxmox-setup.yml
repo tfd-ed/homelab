@@ -28,6 +28,17 @@
         name: htop
         state: present
       tags: htop
+    - name: Install Git
+      apt:
+        name: git
+        state: present
+      tags: git
+
+    - name: Install Vim
+      apt:
+        name: vim
+        state: present
+      tags: vim
 
     - name: Install additional monitoring tools
       apt:
@@ -36,9 +47,57 @@
           - ncdu
           - tmux
           - lm-sensors
-          - vim
         state: present
       tags: tools
+
+    - name: Install prerequisites for Terraform
+      apt:
+        name:
+          - gnupg
+          - wget
+          - curl
+          - lsb-release
+        state: present
+      tags: terraform
+
+    - name: Download HashiCorp GPG key
+      ansible.builtin.get_url:
+        url: https://apt.releases.hashicorp.com/gpg
+        dest: /tmp/hashicorp.gpg
+        mode: "0644"
+      tags: terraform
+
+    - name: Add HashiCorp GPG key to keyring
+      ansible.builtin.shell: |
+        gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg /tmp/hashicorp.gpg
+      args:
+        creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+      tags: terraform
+
+    - name: Get distribution codename
+      ansible.builtin.shell: lsb_release -cs
+      register: distro_codename
+      changed_when: false
+      tags: terraform
+
+    - name: Add HashiCorp repository
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list.d/hashicorp.list
+        line: "deb [arch=amd64 signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com {{ distro_codename.stdout }} main"
+        create: yes
+        mode: "0644"
+      tags: terraform
+
+    - name: Update apt cache after adding HashiCorp repo
+      apt:
+        update_cache: yes
+      tags: terraform
+
+    - name: Install Terraform
+      apt:
+        name: terraform
+        state: present
+      tags: terraform
 
     - name: Verify fastfetch installation
       command: fastfetch --version
@@ -52,11 +111,18 @@
       changed_when: false
       tags: verify
 
+    - name: Verify Terraform installation
+      command: terraform version
+      register: terraform_version
+      changed_when: false
+      tags: verify
+
     - name: Display installed versions
       debug:
         msg:
           - "Fastfetch: {{ fastfetch_version.stdout }}"
           - "Htop: {{ htop_version.stdout }}"
+          - "Terraform: {{ terraform_version.stdout_lines[0] }}"
       tags: verify
 
     - name: Create snippets directory for cloud-init

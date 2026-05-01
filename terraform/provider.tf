@@ -7,7 +7,16 @@ terraform {
       version = "~> 0.60"
     }
   }
+  backend "s3" {
+    bucket         = "tfdevs-terraform-state"
+    key            = "homelab/terraform.tfstate"
+    region         = "ap-southeast-1"
+    dynamodb_table = "terraform-locks"
+    encrypt        = true
+  }
 }
+
+
 
 provider "proxmox" {
   endpoint = var.proxmox_api_url

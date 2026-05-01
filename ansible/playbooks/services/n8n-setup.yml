@@ -6,70 +6,77 @@
   vars:
     n8n_db_name: n8n
     n8n_db_user: n8n
-    n8n_db_password: "n8n_secure_password_change_me" # CHANGE THIS!
+    n8n_db_password: "tfd8n8" # CHANGE THIS!
+    postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') |
+      default('changeme_postgres', true) }}"
 
   tasks:
-    - name: Check if PostgreSQL is installed
-      command: which psql
-      register: psql_check
+    - name: Check if PostgreSQL container is running
+      command: docker inspect -f "{{ '{{' }}.State.Running{{ '}}' }}" postgres
+      register: postgres_container_check
       ignore_errors: yes
       changed_when: false
 
-    - name: Fail if PostgreSQL is not installed
+    - name: Fail if PostgreSQL container is not running
       fail:
-        msg: "PostgreSQL is not installed. Run database-setup.yml first!"
-      when: psql_check.rc != 0
+        msg: "PostgreSQL container is not running. Run database-setup.yml first!"
+      when: postgres_container_check.rc != 0 or postgres_container_check.stdout | trim
+        != "true"
+
+    - name: Install python3-psycopg2 for PostgreSQL modules
+      apt:
+        name: python3-psycopg2
+        state: present
+        update_cache: yes
 
     - name: Create n8n database
-      become_user: postgres
-      postgresql_db:
+      community.postgresql.postgresql_db:
         name: "{{ n8n_db_name }}"
         encoding: UTF8
         lc_collate: en_US.UTF-8
         lc_ctype: en_US.UTF-8
         template: template0
         state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
 
     - name: Create n8n database user
-      become_user: postgres
-      postgresql_user:
+      community.postgresql.postgresql_user:
         name: "{{ n8n_db_user }}"
         password: "{{ n8n_db_password }}"
-        db: "{{ n8n_db_name }}"
-        priv: ALL
         state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
 
     - name: Grant all privileges on n8n database
-      become_user: postgres
-      postgresql_privs:
+      community.postgresql.postgresql_privs:
         database: "{{ n8n_db_name }}"
         privs: ALL
         type: database
         role: "{{ n8n_db_user }}"
         state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
 
-    - name: Ensure PostgreSQL allows connections from n8n VM
-      lineinfile:
-        path: /etc/postgresql/*/main/pg_hba.conf
-        line: "host    {{ n8n_db_name }}    {{ n8n_db_user }}    192.168.100.230/32    md5"
+    - name: Grant USAGE and CREATE on public schema to n8n user
+      community.postgresql.postgresql_privs:
+        database: "{{ n8n_db_name }}"
+        privs: USAGE,CREATE
+        type: schema
+        objs: public
+        role: "{{ n8n_db_user }}"
         state: present
-      notify: Restart PostgreSQL
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
 
-    - name: Ensure PostgreSQL listens on all interfaces
-      lineinfile:
-        path: /etc/postgresql/*/main/postgresql.conf
-        regexp: "^#?listen_addresses"
-        line: "listen_addresses = '*'"
-        state: present
-      notify: Restart PostgreSQL
-
-  handlers:
-    - name: Restart PostgreSQL
-      systemd:
-        name: postgresql
-        state: restarted
-
----
 - name: Setup n8n Workflow Automation on n8n VM
   hosts: n8n
   remote_user: ubuntu
@@ -82,7 +89,7 @@
     n8n_db_port: 5432
     n8n_db_name: n8n
     n8n_db_user: n8n
-    n8n_db_password: "n8n_secure_password_change_me" # MUST MATCH DATABASE PASSWORD!
+    n8n_db_password: "tfd8n8" # MUST MATCH DATABASE PASSWORD!
     n8n_encryption_key: "change_this_to_random_string_32_chars" # CHANGE THIS! Generate with: openssl rand -hex 16
     n8n_webhook_url: "http://192.168.100.230:5678" # Change to your domain if using reverse proxy
     n8n_timezone: "America/Los_Angeles" # Change to your timezone
@@ -117,6 +124,8 @@
         path: "{{ item }}"
         state: directory
         mode: "0755"
+        owner: "1000"
+        group: "1000"
       loop:
         - "{{ n8n_dir }}"
         - "{{ n8n_dir }}/data"
@@ -124,8 +133,8 @@
 
     - name: Test database connectivity
       command: >
-        psql -h {{ n8n_db_host }} -p {{ n8n_db_port }} 
-        -U {{ n8n_db_user }} -d {{ n8n_db_name }} -c "SELECT 1;"
+        psql -h {{ n8n_db_host }} -p {{ n8n_db_port }}  -U {{ n8n_db_user }} -d
+        {{ n8n_db_name }} -c "SELECT 1;"
       environment:
         PGPASSWORD: "{{ n8n_db_password }}"
       register: db_test
@@ -134,7 +143,8 @@
 
     - name: Display database connection status
       debug:
-        msg: "{{ 'Database connection successful!' if db_test.rc == 0 else 'WARNING: Cannot connect to database. Check credentials and pg_hba.conf' }}"
+        msg: "{{ 'Database connection successful!' if db_test.rc == 0 else 'WARNING:
+          Cannot connect to database. Check credentials and pg_hba.conf' }}"
 
     - name: Create n8n Docker Compose file
       copy:
@@ -238,10 +248,10 @@
         mode: "0600"
 
     - name: Start n8n with Docker Compose
-      docker_compose:
+      community.docker.docker_compose_v2:
         project_src: "{{ n8n_dir }}"
         state: present
-        pull: yes
+        pull: always
       register: n8n_start
 
     - name: Wait for n8n to be ready

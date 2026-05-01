@@ -12,6 +12,10 @@ echo -e "${BLUE}Grafana Dashboards Auto-Provisioning${NC}"
 echo -e "${BLUE}=========================================${NC}"
 echo ""
 
+# Change to project root if running from script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
 MONITORING_VM="192.168.100.220"
 
 # Check if monitoring VM is reachable
