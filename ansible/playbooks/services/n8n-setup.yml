@@ -91,7 +91,7 @@
     n8n_db_user: n8n
     n8n_db_password: "tfd8n8" # MUST MATCH DATABASE PASSWORD!
     n8n_encryption_key: "change_this_to_random_string_32_chars" # CHANGE THIS! Generate with: openssl rand -hex 16
-    n8n_webhook_url: "http://192.168.100.230:5678" # Change to your domain if using reverse proxy
+    n8n_webhook_url: "https://n8n.tfdevs.com" # Change to your domain if using reverse proxy
     n8n_timezone: "America/Los_Angeles" # Change to your timezone
 
   tasks:

@@ -106,6 +106,7 @@ homelab-journey/
 │   └── playbooks/      # 🆕 Organized playbooks by category
 │       ├── infrastructure/    # Core infrastructure setup
 │       │   ├── proxmox-setup.yml
+│       │   ├── proxmox-node-server-setup.yml  # Temperature monitor API
 │       │   ├── qemu-agent-setup.yml
 │       │   ├── docker-setup.yml
 │       │   └── nginx-gateway-setup.yml
@@ -123,6 +124,7 @@ homelab-journey/
 ├── script/             # Helper scripts
 │   ├── setup-k8s-complete.sh
 │   ├── setup-cloudflare-tunnel.sh
+│   ├── run-proxmox-node-server-setup.sh  # Temperature server runner
 │   ├── run-monitoring-setup.sh
 │   ├── run-monitoring-dashboards-setup.sh
 │   ├── run-n8n-setup.sh
@@ -153,6 +155,27 @@ cd ansible
 ansible-playbook playbooks/infrastructure/proxmox-setup.yml
 ```
 This playbook will setup basic packages such as `fastfetch`, `htop`, `lm-sensors`, `qemu-guest-agent`, create cloud-init configuration for terraform to use that add ssh user with your public key.
+
+### 1a. Setup Temperature Monitor API on Proxmox Host
+
+Deploys a small Express.js REST API directly on the Proxmox host that exposes `lm-sensors` readings over HTTP. Node.js is installed via NVM and the server runs as a systemd service.
+
+```bash
+# Direct IP access
+./script/run-proxmox-node-server-setup.sh
+
+# Via Cloudflare tunnel
+./script/run-proxmox-node-server-setup.sh --tunnel
+```
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Liveness check |
+| `GET /temperature` | All sensor readings (flat list) |
+| `GET /temperature/cpu` | CPU / core temperatures only |
+| `GET /temperature/raw` | Raw `sensors -j` JSON output |
+
+Default port: **3000** (`http://192.168.100.50:3000`)
 
 
 ### 2. Provision VMs with Terraform

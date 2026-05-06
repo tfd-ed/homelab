@@ -1,0 +1,202 @@
+{
+  "name": "Homelab AI Telegram Bot (TinyLlama)",
+  "nodes": [
+    {
+      "parameters": {
+        "chatId": "={{$node[\"Telegram Trigger\"].json[\"message\"][\"chat\"][\"id\"]}}",
+        "text": "={{$json.response}}",
+        "additionalFields": {}
+      },
+      "id": "653feb6b-2cf4-4f4e-a87b-efa4b63f9480",
+      "name": "Send Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [-272, -304],
+      "webhookId": "06f96f44-4a22-40c6-9759-5d76c957a9da",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Telegram Trigger').item.json.message.text }}",
+        "options": {
+          "systemMessage": "You are a homelab infrastructure assistant. You have access to Prometheus, \nwhich monitors these services:\n- Kubernetes nodes: 192.168.100.201, 192.168.100.202, 192.168.100.203\n- Database VM (PostgreSQL, MongoDB, Redis): 192.168.100.205\n- Monitoring VM: 192.168.100.220\n- CI/CD VM: 192.168.100.240\n\nWhen the user asks about system health, use the query_prometheus tool with \nappropriate PromQL. Always interpret the results in plain language and \nhighlight any anomalies (e.g., CPU > 80%, targets that are down)."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [-736, -304],
+      "id": "8a270344-c389-4436-8695-4b0b3b015168",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "tinyllama:1.1b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [-864, -80],
+      "id": "77dcec34-d8c9-4391-9b18-e0b004d8aac4",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "MFSd9R18qT5QwwPf",
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "databaseName": "llm-memory",
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Telegram Trigger').item.json.message.chat.id }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryMongoDbChat",
+      "typeVersion": 1,
+      "position": [-736, -80],
+      "id": "1db83090-f456-4ccc-a781-6f084eb7abe8",
+      "name": "MongoDB Chat Memory",
+      "credentials": {
+        "mongoDb": {
+          "id": "vCANYtCZveCJVls0",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [-1088, -304],
+      "id": "77e6b8dd-7f33-4ce8-889f-01a0f985730b",
+      "name": "Telegram Trigger",
+      "webhookId": "e3aaf6de-156a-4b17-b2ba-e792c979804e",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Query Prometheus for real-time infrastructure metrics. Input must be a valid PromQL expression string.",
+        "url": "http://192.168.100.220:9090/api/v1/query",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ $fromAI('promql_query', 'PromQL expression to execute') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [-608, -80],
+      "id": "871654cf-9fa4-40ee-bda1-90f21e3bcd95",
+      "name": "query_prometheus"
+    },
+    {
+      "parameters": {
+        "toolDescription": "List all Prometheus scrape targets and their up/down status.",
+        "url": "http://192.168.100.220:9090/api/v1/targets",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [-480, -80],
+      "id": "e4f864c5-5d38-4b1b-913a-47e11374ca40",
+      "name": "list_prometheus_targets"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Send Reply": {
+      "main": [[]]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "query_prometheus": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "list_prometheus_targets": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "415de7f9-982b-4bbd-b487-f0a2393d5b39",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f64e3d63504ad1d7f005ba30acf82b7cd3a28576038a02bcc8099ca954616617"
+  },
+  "id": "4POpWzkVCyNu6y5T",
+  "tags": []
+}

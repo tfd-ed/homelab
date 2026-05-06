@@ -1,0 +1,229 @@
+---
+- name: Setup Temperature Monitor Node.js Server on Proxmox Host
+  hosts: proxmox
+  become: true
+
+  vars:
+    nvm_version: "v0.40.3"
+    node_version: "22"
+    app_dir: /opt/temperature-server
+    app_port: 3000
+    nvm_dir: /root/.nvm
+
+  tasks:
+    # ── Prerequisites ────────────────────────────────────────────────────────
+    - name: Install prerequisites
+      apt:
+        name:
+          - curl
+          - lm-sensors
+          - build-essential
+        state: present
+        update_cache: yes
+      tags: prerequisites
+
+    # ── NVM + Node.js ────────────────────────────────────────────────────────
+    - name: Install NVM
+      shell: >
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/{{ nvm_version
+        }}/install.sh | bash
+      args:
+        executable: /bin/bash
+        creates: "{{ nvm_dir }}/nvm.sh"
+      environment:
+        NVM_DIR: "{{ nvm_dir }}"
+      tags: nvm
+
+    - name: Install Node.js {{ node_version }} LTS via NVM
+      shell: |
+        export NVM_DIR="{{ nvm_dir }}"
+        source "{{ nvm_dir }}/nvm.sh"
+        nvm install {{ node_version }}
+        nvm alias default {{ node_version }}
+      args:
+        executable: /bin/bash
+      register: node_install_result
+      changed_when: "'already installed' not in node_install_result.stdout"
+      tags: nodejs
+
+    - name: Resolve node binary path
+      shell: |
+        export NVM_DIR="{{ nvm_dir }}"
+        source "{{ nvm_dir }}/nvm.sh"
+        nvm which {{ node_version }}
+      args:
+        executable: /bin/bash
+      register: node_bin_path
+      changed_when: false
+      tags: nodejs
+
+    # ── Application files ────────────────────────────────────────────────────
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: "0755"
+      tags: app
+
+    - name: Deploy package.json
+      copy:
+        dest: "{{ app_dir }}/package.json"
+        mode: "0644"
+        content: |
+          {
+            "name": "temperature-server",
+            "version": "1.0.0",
+            "description": "Proxmox host temperature monitoring REST API",
+            "main": "app.js",
+            "scripts": {
+              "start": "node app.js"
+            },
+            "dependencies": {
+              "express": "^4.19.2"
+            }
+          }
+      register: package_json
+      tags: app
+
+    - name: Deploy Express application (app.js)
+      copy:
+        dest: "{{ app_dir }}/app.js"
+        mode: "0644"
+        content: |
+          'use strict';
+
+          const express = require('express');
+          const { execSync } = require('child_process');
+
+          const app = express();
+          const PORT = process.env.PORT || {{ app_port }};
+
+          // Parse `sensors -j` output from lm-sensors
+          function getSensorData() {
+            try {
+              const raw = execSync('sensors -j', { encoding: 'utf8', timeout: 5000 });
+              return JSON.parse(raw);
+            } catch (err) {
+              throw new Error('Failed to read sensor data: ' + err.message);
+            }
+          }
+
+          // Flatten all *_input temperature readings from sensor JSON
+          function extractTemperatures(sensorData) {
+            const temps = [];
+            for (const [chip, chipData] of Object.entries(sensorData)) {
+              for (const [feature, featureData] of Object.entries(chipData)) {
+                if (typeof featureData !== 'object' || featureData === null) continue;
+                for (const [subKey, value] of Object.entries(featureData)) {
+                  if (subKey.endsWith('_input') && typeof value === 'number') {
+                    temps.push({ chip, feature, celsius: value });
+                  }
+                }
+              }
+            }
+            return temps;
+          }
+
+          // GET /health
+          app.get('/health', (_req, res) => {
+            res.json({ status: 'ok', timestamp: new Date().toISOString() });
+          });
+
+          // GET /temperature  – all readings as flat list
+          app.get('/temperature', (_req, res) => {
+            try {
+              const temps = extractTemperatures(getSensorData());
+              res.json({ temperatures: temps, count: temps.length, timestamp: new Date().toISOString() });
+            } catch (err) {
+              res.status(500).json({ error: err.message });
+            }
+          });
+
+          // GET /temperature/raw  – raw sensors -j JSON
+          app.get('/temperature/raw', (_req, res) => {
+            try {
+              res.json({ data: getSensorData(), timestamp: new Date().toISOString() });
+            } catch (err) {
+              res.status(500).json({ error: err.message });
+            }
+          });
+
+          // GET /temperature/cpu  – only core/CPU readings
+          app.get('/temperature/cpu', (_req, res) => {
+            try {
+              const all = extractTemperatures(getSensorData());
+              const cpu = all.filter(t =>
+                /core|cpu|coretemp|k10temp/i.test(t.chip) ||
+                /core|cpu/i.test(t.feature)
+              );
+              res.json({ cpu_temperatures: cpu, count: cpu.length, timestamp: new Date().toISOString() });
+            } catch (err) {
+              res.status(500).json({ error: err.message });
+            }
+          });
+
+          app.listen(PORT, '0.0.0.0', () => {
+            console.log(`Temperature server listening on port ${PORT}`);
+          });
+      register: app_js
+      notify: Restart temperature-server
+      tags: app
+
+    # ── npm dependencies ─────────────────────────────────────────────────────
+    - name: Check if node_modules exists
+      stat:
+        path: "{{ app_dir }}/node_modules"
+      register: node_modules_stat
+      tags: app
+
+    - name: Install npm dependencies
+      shell: |
+        export NVM_DIR="{{ nvm_dir }}"
+        source "{{ nvm_dir }}/nvm.sh"
+        nvm use {{ node_version }}
+        cd {{ app_dir }} && npm install --production
+      args:
+        executable: /bin/bash
+      when: package_json.changed or not node_modules_stat.stat.exists
+      tags: app
+
+    # ── systemd service ──────────────────────────────────────────────────────
+    - name: Deploy systemd service unit
+      copy:
+        dest: /etc/systemd/system/temperature-server.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Proxmox Temperature Monitor API
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          WorkingDirectory={{ app_dir }}
+          ExecStart={{ node_bin_path.stdout | trim }} {{ app_dir }}/app.js
+          Restart=on-failure
+          RestartSec=5
+          Environment=PORT={{ app_port }}
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart temperature-server
+      tags: service
+
+    - name: Enable and start temperature-server
+      systemd:
+        name: temperature-server
+        enabled: true
+        state: started
+        daemon_reload: true
+      tags: service
+
+  handlers:
+    - name: Restart temperature-server
+      systemd:
+        name: temperature-server
+        state: restarted
+        daemon_reload: true

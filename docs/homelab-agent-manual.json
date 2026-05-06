@@ -1,0 +1,518 @@
+{
+  "name": "Homelab AI Telegram Bot (Manual TinyLlama)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [-1200, 96],
+      "id": "ece238c8-0865-4f58-8c79-a3c98aaba97f",
+      "name": "Telegram Trigger",
+      "webhookId": "e3aaf6de-156a-4b17-b2ba-e792c979804e",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "collection": "chat_history",
+        "options": {
+          "limit": 6,
+          "sort": "{ \"ts\": -1 }"
+        },
+        "query": "={{ JSON.stringify({ chat_id: $json.message ? $json.message.chat.id : $json.callback_query.message.chat.id }) }}"
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1,
+      "position": [-976, 96],
+      "id": "e0654d6a-0166-4f53-878e-4aa93737d9b4",
+      "name": "Load History",
+      "alwaysOutputData": true,
+      "credentials": {
+        "mongoDb": {
+          "id": "vCANYtCZveCJVls0",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Runs even when MongoDB returned 0 items (new user / no history)\n// Handles both regular messages and inline keyboard callback_query taps\nconst trigger = $('Telegram Trigger').first().json;\nconst history = $input.all()\n  .map(i => i.json)\n  .filter(d => d.role && d.content)\n  .reverse();\n\nlet chatId, userText, callbackQueryId;\nif (trigger.callback_query) {\n  // Inline keyboard button was tapped\n  chatId = trigger.callback_query.message.chat.id;\n  userText = trigger.callback_query.data; // the callback_data we set = question text\n  callbackQueryId = trigger.callback_query.id;\n} else {\n  // Regular text message\n  chatId = trigger.message.chat.id;\n  userText = trigger.message.text || '';\n  callbackQueryId = null;\n}\n\nreturn [{\n  json: {\n    chatId,\n    userText,\n    callbackQueryId,\n    history\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-752, 96],
+      "id": "a8650e1f-9486-42cb-9c3d-9dc5f1ee6921",
+      "name": "Collect History",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build prompt from collected history + current user message\nconst { chatId, userText, history } = $input.first().json;\n\nconst historyText = history.length > 0\n  ? history.map(d => `${d.role === 'user' ? 'User' : 'Assistant'}: ${d.content}`).join('\\n')\n  : '';\n\n// Keyword-based intent detection\nconst metricKeywords = [\n  'cpu', 'memory', 'ram', 'disk', 'up', 'down', 'health', 'status',\n  'monitor', 'metric', 'load', 'usage', 'target', 'node', 'k8s',\n  'kubernetes', 'database', 'postgres', 'redis', 'docker', 'alert',\n  'prometheus', 'grafana', 'vm', 'server'\n];\nconst lower = userText.toLowerCase();\nconst needsMetrics = metricKeywords.some(k => lower.includes(k));\n\nconst systemPrompt = `You are a homelab infrastructure assistant for a server running Proxmox with several VMs:\n- K8s nodes: 192.168.100.201-203\n- Database VM (Postgres, MongoDB, Redis): 192.168.100.205\n- Monitoring VM (Prometheus + Grafana): 192.168.100.220\n- CI/CD VM: 192.168.100.240\n- n8n VM: 192.168.100.230\n\nAnswer clearly and concisely. If given Prometheus data, interpret it in plain language in telegram friendly format!`;\n\nconst fullPrompt = [\n  systemPrompt,\n  historyText ? '\\nConversation so far:\\n' + historyText : '',\n  `\\nUser: ${userText}\\nAssistant:`\n].filter(Boolean).join('\\n');\n\nreturn [{\n  json: {\n    chatId,\n    userText,\n    needsMetrics,\n    fullPrompt\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-528, 96],
+      "id": "cf3ed61c-6618-4d68-9e8a-79dc009be0e2",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"tinyllama:1.1b\",\n  \"prompt\": {{ JSON.stringify($json.fullPrompt) }},\n  \"stream\": false,\n  \"options\": {\n    \"temperature\": 0.3,\n    \"num_predict\": 300\n  }\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [-304, 96],
+      "id": "8bc6b42d-24d7-4821-8d40-eba51d1bbfcc",
+      "name": "Ask Ollama (intent)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the initial Ollama response\nconst ollamaResp = $input.first().json;\nconst promptCtx  = $('Build Prompt').first().json;\nconst rawAnswer  = (ollamaResp.response || '').trim();\n\n// Detect which Prometheus query to run based on keyword intent\nconst lower = promptCtx.userText.toLowerCase();\n\nlet promqlQuery = null;\nif (promptCtx.needsMetrics) {\n  if (lower.includes('cpu')) {\n    promqlQuery = '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)';\n  } else if (lower.includes('memory') || lower.includes('ram')) {\n    promqlQuery = '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100';\n  } else if (lower.includes('disk')) {\n    promqlQuery = '(node_filesystem_size_bytes{mountpoint=\"/\"} - node_filesystem_free_bytes{mountpoint=\"/\"}) / node_filesystem_size_bytes{mountpoint=\"/\"} * 100';\n  } else if (lower.includes('up') || lower.includes('down') || lower.includes('status') || lower.includes('health') || lower.includes('target')) {\n    promqlQuery = 'up';\n  } else {\n    // Generic: just check all targets up status\n    promqlQuery = 'up';\n  }\n}\n\nreturn [{\n  json: {\n    chatId: promptCtx.chatId,\n    userText: promptCtx.userText,\n    fullPrompt: promptCtx.fullPrompt,\n    needsMetrics: promptCtx.needsMetrics,\n    initialAnswer: rawAnswer,\n    promqlQuery\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-80, 96],
+      "id": "7cc980c6-371a-422d-9f9b-8c36980e870d",
+      "name": "Parse Intent"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needsMetrics }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "id": "49a3ccea-843b-4b86-9011-01f2f8bec184"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [144, 96],
+      "id": "a36f2214-8b5a-4d47-a06a-998defba9a16",
+      "name": "Needs Metrics?"
+    },
+    {
+      "parameters": {
+        "url": "=http://192.168.100.220:9090/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.promqlQuery }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [368, 0],
+      "id": "f7ee1b9e-f0a1-4198-8645-ae97b0e74123",
+      "name": "Query Prometheus"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format Prometheus results into a readable summary for the LLM\nconst promData = $input.first().json;\nconst ctx = $('Parse Intent').first().json;\n\nconst results = (promData.data && promData.data.result) || [];\n\nlet summary = '';\nif (results.length === 0) {\n  summary = 'No data returned from Prometheus.';\n} else {\n  summary = results.map(r => {\n    const labels = Object.entries(r.metric || {})\n      .filter(([k]) => k !== '__name__')\n      .map(([k, v]) => `${k}=${v}`)\n      .join(', ');\n    const value = parseFloat(r.value[1]).toFixed(2);\n    return `${labels || 'instance'}: ${value}`;\n  }).join('\\n');\n}\n\n// Second prompt: ask LLM to interpret the metrics\nconst interpretPrompt = `${ctx.fullPrompt}\n\nReal-time Prometheus data for query (${ctx.promqlQuery}):\n${summary}\n\nBased on the above data, answer the user's question: \"${ctx.userText}\"\nBe concise. Highlight any values that look abnormal (CPU>80%, memory>85%, disk>80%, status=0).\\nAssistant:`;\n\nreturn [{\n  json: {\n    chatId: ctx.chatId,\n    userText: ctx.userText,\n    interpretPrompt,\n    metricsSummary: summary\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [592, 0],
+      "id": "2a7fa75a-2836-4318-bc2d-4a50b3ecbda3",
+      "name": "Format Metrics"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"tinyllama:1.1b\",\n  \"prompt\": {{ JSON.stringify($json.interpretPrompt) }},\n  \"stream\": false,\n  \"options\": {\n    \"temperature\": 0.2,\n    \"num_predict\": 400\n  }\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [816, 0],
+      "id": "84516a96-8375-4e34-ae52-4df0184a4d4d",
+      "name": "Ask Ollama (interpret)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge both branches into a single { chatId, userText, finalAnswer } object\nconst items = $input.all();\n\n// From the metrics branch (Ask Ollama interpret)\nconst ollamaResp = items[0].json;\nconst formatCtx  = $('Format Metrics').first().json;\n\nreturn [{\n  json: {\n    chatId: formatCtx.chatId,\n    userText: formatCtx.userText,\n    finalAnswer: (ollamaResp.response || '').trim()\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 0],
+      "id": "31056c76-fb0e-453b-ad56-75cecbe6c560",
+      "name": "Merge (metrics branch)",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pass-through for the no-metrics branch\nconst ctx = $input.first().json;\nreturn [{\n  json: {\n    chatId: ctx.chatId,\n    userText: ctx.userText,\n    finalAnswer: ctx.initialAnswer\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 240],
+      "id": "4f62945c-508b-4bbd-b696-b8943f1784b5",
+      "name": "Pass-through (no metrics)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\n// Prepare two documents to save: user message + assistant reply\nreturn [\n  {\n    json: {\n      chat_id: item.chatId,\n      role: 'user',\n      content: item.userText,\n      ts: Date.now()\n    }\n  },\n  {\n    json: {\n      chat_id: item.chatId,\n      role: 'assistant',\n      content: item.finalAnswer,\n      ts: Date.now() + 1\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1408, 240],
+      "id": "3e1991d5-ff6c-408a-9322-36e387b11bea",
+      "name": "Prepare History Docs"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "collection": "chat_history",
+        "fields": "chat_id,role,content,ts",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1,
+      "position": [1616, 240],
+      "id": "6538b124-5884-42fd-a1ad-e65eee1a81b7",
+      "name": "Save History",
+      "credentials": {
+        "mongoDb": {
+          "id": "vCANYtCZveCJVls0",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.finalAnswer }}",
+        "additionalFields": {
+          "replyMarkup": "inlineKeyboard",
+          "inlineKeyboard": {
+            "rows": [
+              {
+                "row": {
+                  "buttons": [
+                    {
+                      "text": "🔍 Node status",
+                      "callbackData": "Are all my homelab nodes up?"
+                    },
+                    {
+                      "text": "💻 CPU usage",
+                      "callbackData": "What is the CPU usage on all nodes?"
+                    }
+                  ]
+                }
+              },
+              {
+                "row": {
+                  "buttons": [
+                    {
+                      "text": "🧠 Memory",
+                      "callbackData": "What is the memory usage?"
+                    },
+                    {
+                      "text": "💾 Disk",
+                      "callbackData": "What is the disk usage?"
+                    }
+                  ]
+                }
+              },
+              {
+                "row": {
+                  "buttons": [
+                    {
+                      "text": "☸️ K8s health",
+                      "callbackData": "Is the Kubernetes cluster healthy?"
+                    },
+                    {
+                      "text": "🗄️ Database",
+                      "callbackData": "Is the database VM running?"
+                    }
+                  ]
+                }
+              },
+              {
+                "row": {
+                  "buttons": [
+                    {
+                      "text": "🔧 CI/CD",
+                      "callbackData": "Show me the CI/CD VM status"
+                    },
+                    {
+                      "text": "📊 Monitoring",
+                      "callbackData": "Is the monitoring VM running?"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1616, -48],
+      "id": "e8d7a604-6401-4333-94c5-8f62f439646b",
+      "name": "Send Reply",
+      "webhookId": "cabdc9ab-54ca-4907-845e-c0b91da76b33",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "answerCallbackQuery",
+        "queryId": "={{ $json.callbackQueryId || '' }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1820, -48],
+      "id": "node-answer-callback",
+      "name": "Answer Callback Query",
+      "continueOnFail": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nlet text = (item.finalAnswer || '(no response)');\n// Replace curly braces from PromQL/JSON\ntext = text.replace(/\\{/g, '(').replace(/\\}/g, ')');\n// Remove backslashes\ntext = text.replace(/\\\\/g, '');\n// Replace backticks (Telegram code markers)\ntext = text.replace(/`/g, \"'\");\n// Remove * and _ — Telegram Markdown treats these as bold/italic markers\ntext = text.replace(/\\*/g, '').replace(/_/g, ' ');\n// Replace [ ] — Telegram treats these as link markers\ntext = text.replace(/\\[/g, '(').replace(/\\]/g, ')');\n// Trim to Telegram's 4096 char limit\ntext = text.slice(0, 4096);\nreturn [{ json: { ...item, finalAnswer: text } }];\n",
+        "onError": "continueRegularOutput"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, -48],
+      "id": "node-sanitize-reply",
+      "name": "Sanitize Reply"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load History": {
+      "main": [
+        [
+          {
+            "node": "Collect History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect History": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Ask Ollama (intent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Ollama (intent)": {
+      "main": [
+        [
+          {
+            "node": "Parse Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Intent": {
+      "main": [
+        [
+          {
+            "node": "Needs Metrics?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Metrics?": {
+      "main": [
+        [
+          {
+            "node": "Query Prometheus",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pass-through (no metrics)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Prometheus": {
+      "main": [
+        [
+          {
+            "node": "Format Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Metrics": {
+      "main": [
+        [
+          {
+            "node": "Ask Ollama (interpret)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Ollama (interpret)": {
+      "main": [
+        [
+          {
+            "node": "Merge (metrics branch)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge (metrics branch)": {
+      "main": [
+        [
+          {
+            "node": "Prepare History Docs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sanitize Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pass-through (no metrics)": {
+      "main": [
+        [
+          {
+            "node": "Prepare History Docs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sanitize Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare History Docs": {
+      "main": [
+        [
+          {
+            "node": "Save History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save History": {
+      "main": [[]]
+    },
+    "Sanitize Reply": {
+      "main": [[{ "node": "Send Reply", "type": "main", "index": 0 }]]
+    },
+    "Send Reply": {
+      "main": [
+        [{ "node": "Answer Callback Query", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d627d81a-c8e0-4dd0-b9aa-d15db35637b4",
+  "meta": {
+    "instanceId": "f64e3d63504ad1d7f005ba30acf82b7cd3a28576038a02bcc8099ca954616617"
+  },
+  "id": "9Vk9qMzT6JPqI2xU",
+  "tags": []
+}
