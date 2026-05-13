@@ -1,0 +1,447 @@
+{
+  "name": "Aggregate Agent with Intent (gemma2:2b)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [-656, 192],
+      "id": "e832f1c3-5232-4e75-9d52-9f1442c11512",
+      "name": "Telegram Trigger",
+      "webhookId": "cd3bed2f-e966-4d43-8a7e-4708ce2a3ea2",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Classify user intent from their Telegram message using regex.\n// No LLM call needed — fast and deterministic for common queries.\n// Intents: temp | cpu | memory | disk | full\n// ---------------------------------------------------------------------------\nconst msg = ($input.first().json.message?.text || '').toLowerCase().trim();\n\nconst rules = [\n  { intent: 'temp',   pattern: /\\b(temp|hot|heat|cool|overh|burn|thermal|degree|°)/ },\n  { intent: 'cpu',    pattern: /\\b(cpu|processor|load|compute|utiliz|usage.*cpu|cpu.*usage)/ },\n  { intent: 'memory', pattern: /\\b(mem|ram|swap|heap|out.of.memory|oom)/ },\n  { intent: 'disk',   pattern: /\\b(disk|storage|space|volume|lvm|partition|full|free.space)/ },\n];\n\nlet intent = 'full'; // default: full report\nfor (const rule of rules) {\n  if (rule.pattern.test(msg)) {\n    intent = rule.intent;\n    break;\n  }\n}\n\nreturn [{ json: { intent, userMessage: msg } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-432, 192],
+      "id": "81c771ee-67b9-468b-acfe-029eabe969ba",
+      "name": "Classify Intent",
+      "notes": "Pure regex routing — no LLM call. Falls back to 'full' for unrecognised input."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "temp",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "72141342-35fa-4819-b449-56cb4f6c754a"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "temp"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "cpu",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "90fc7f81-beee-4b8c-9931-2070e74a5c38"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cpu"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "memory",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "ccf79867-d80e-440e-97a2-c32517688799"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "memory"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "disk",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "ff4b9823-6d6c-407c-8b30-131804131c33"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "disk"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [-208, 160],
+      "id": "7b044fdf-63f7-4244-9ce3-c63e26fce17f",
+      "name": "Intent Router",
+      "notes": "output 0=temp, 1=cpu, 2=memory, 3=disk, fallback=full"
+    },
+    {
+      "parameters": {
+        "url": "http://192.168.100.50:3000/temperature/raw",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [16, 0],
+      "id": "1ba15661-83ad-4009-9bb3-1f10a1cdf948",
+      "name": "Fetch Temp"
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $input.first().json?.data || {};\n\nfunction label(val, w, c) {\n  const n = parseFloat(val);\n  if (isNaN(n)) return '?';\n  return n >= c ? 'CRIT' : n >= w ? 'WARN' : 'OK';\n}\n\nconst cpu  = t['k10temp-pci-00c3']?.Tctl?.temp1_input  ?? 'N/A';\nconst gpu  = t['amdgpu-pci-0500']?.edge?.temp1_input   ?? 'N/A';\nconst nvme = t['nvme-pci-0400']?.Composite?.temp1_input ?? 'N/A';\n\nconst cpuSt  = label(cpu,  85, 95);\nconst nvmeSt = label(nvme, 70, 80);\n\nconst overallSt = [cpuSt, nvmeSt].includes('CRIT') ? 'CRIT'\n  : [cpuSt, nvmeSt].includes('WARN') ? 'WARN' : 'OK';\n\nconst phrase = {\n  OK:   'All temperatures are within safe limits.',\n  WARN: 'Some components are running warm — keep an eye on it.',\n  CRIT: 'Temperature critically high — check cooling immediately.'\n}[overallSt];\n\nconst text =\n`\u1f321\ufe0f *Temperatures*\nCPU: ${cpu}\u00b0C [${cpuSt}] | GPU: ${gpu}\u00b0C | NVMe: ${nvme}\u00b0C [${nvmeSt}]\n_${phrase}_`;\n\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0],
+      "id": "cdd6b324-d126-4449-8364-f79d1617995b",
+      "name": "Format Temp"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [16, 192],
+      "id": "ce818e68-d51a-411d-8769-da4f18c7022f",
+      "name": "Fetch Status (CPU/RAM)",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $input.first().json?.data || {};\nconst intent = $('Classify Intent').first().json.intent;\n\nfunction label(val, w, c) {\n  const n = parseFloat(val);\n  if (isNaN(n)) return '?';\n  return n >= c ? 'CRIT' : n >= w ? 'WARN' : 'OK';\n}\n\nconst cpuPct = ((s.cpu || 0) * 100).toFixed(1);\nconst cpuSt  = label(cpuPct, 80, 95);\nconst load   = (s.loadavg || []).join(', ');\n\nconst ramPct = s.memory?.total\n  ? ((s.memory.used / s.memory.total) * 100).toFixed(1) : 'N/A';\nconst ramSt  = label(ramPct, 85, 95);\nconst ramUsedGB = s.memory?.used  ? (s.memory.used  / 1073741824).toFixed(1) : '?';\nconst ramTotGB  = s.memory?.total ? (s.memory.total / 1073741824).toFixed(1) : '?';\nconst swapPct   = s.swap?.total\n  ? ((s.swap.used / s.swap.total) * 100).toFixed(1) : '0.0';\n\nlet text;\nif (intent === 'cpu') {\n  const phrase = {\n    OK:   'CPU is idle and happy.',\n    WARN: 'CPU load is elevated — something is busy.',\n    CRIT: 'CPU is under very heavy load.'\n  }[cpuSt];\n  text = `\u1f4bb *CPU*\nUsage: ${cpuPct}% [${cpuSt}] | Load avg: ${load}\n_${phrase}_`;\n} else {\n  const phrase = {\n    OK:   'Memory usage is healthy.',\n    WARN: 'Memory is getting high — check running services.',\n    CRIT: 'Running critically low on RAM.'\n  }[ramSt];\n  text = `\u1f9e0 *Memory*\nRAM: ${ramUsedGB} / ${ramTotGB} GB (${ramPct}%) [${ramSt}] | Swap: ${swapPct}%\n_${phrase}_`;\n}\n\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 192],
+      "id": "c3048aa7-0a09-4083-836b-8bd98ec7a624",
+      "name": "Format CPU or RAM"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/storage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [16, 384],
+      "id": "896dd77b-dae4-41c6-8034-63a311a103ab",
+      "name": "Fetch Disk",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const disk = $input.first().json?.data || [];\n\nfunction label(val, w, c) {\n  const n = parseFloat(val);\n  if (isNaN(n)) return '?';\n  return n >= c ? 'CRIT' : n >= w ? 'WARN' : 'OK';\n}\n\nconst lines = disk.map(d => {\n  const pct = (d.used_fraction * 100).toFixed(1);\n  const freeGB = (d.avail / 1073741824).toFixed(1);\n  return `- ${d.storage} (${d.type}): ${pct}% used, ${freeGB} GB free [${label(pct, 80, 90)}]`;\n}).join('\\n');\n\nconst worst = disk.reduce((acc, d) => Math.max(acc, d.used_fraction * 100), 0);\nconst worstSt = label(worst, 80, 90);\n\nconst phrase = {\n  OK:   'Storage is in good shape.',\n  WARN: 'Some pools are getting full — consider cleaning up.',\n  CRIT: 'Storage critically low — act now.'\n}[worstSt];\n\nconst text = `\u1f4be *Storage*\n${lines}\n_${phrase}_`;\n\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 384],
+      "id": "0eb2b640-da08-4f18-b66c-0bede7cd20a2",
+      "name": "Format Disk"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"qwen3.5:0.8b\",\n  \"prompt\": {{ JSON.stringify($json.prompt) }},\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [464, 224],
+      "id": "40ea41b3-bb96-43c0-9161-86992a8567c2",
+      "name": "Ollama Tinyllama"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract first clean sentence from LLM, append under structured data.\nconst llmRaw = ($input.first().json.response || '').trim();\nconst firstLine = llmRaw.split(/[\\n]/)[0].trim();\n// Strip any echoed 'Sentence:' prefix the LLM might produce\nconst sentence = firstLine.replace(/^sentence[:\\s]*/i, '').trim();\n\nconst formattedText = $('Aggregate Full').first().json.formattedText || '';\n\nconst text = sentence\n  ? `${formattedText}\\n_${sentence}_`\n  : formattedText;\n\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [688, 608],
+      "id": "e5f6a7b8-c9d0-1234-abcd-ef5678901234",
+      "name": "Compose Reply"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": { "allowUnauthorizedCerts": true }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-208, 480],
+      "id": "f2a3b4c5-d6e7-7890-abcd-ef1234567895",
+      "name": "PVE Status",
+      "credentials": {
+        "httpCustomAuth": { "id": "X7hwUIEIvctXPw4X", "name": "Proxmox Auth" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://192.168.100.50:3000/temperature/raw",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-208, 576],
+      "id": "f3a4b5c6-d7e8-7890-abcd-ef1234567896",
+      "name": "PVE RAW Tem"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/storage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": { "allowUnauthorizedCerts": true }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-208, 672],
+      "id": "f4a5b6c7-d8e9-7890-abcd-ef1234567897",
+      "name": "PVE Disk Usage",
+      "credentials": {
+        "httpCustomAuth": { "id": "X7hwUIEIvctXPw4X", "name": "Proxmox Auth" }
+      }
+    },
+    {
+      "parameters": { "numberInputs": 3 },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [16, 576],
+      "id": "c033783f-fae1-4233-b9f2-d4389c00896e",
+      "name": "Merge Full"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst status = items[0]?.json?.data || {};\nconst temp   = items[1]?.json?.data || {};\nconst disk   = items[2]?.json?.data || [];\n\nfunction label(val, w, c) {\n  const n = parseFloat(val);\n  if (isNaN(n)) return '?';\n  return n >= c ? 'CRIT' : n >= w ? 'WARN' : 'OK';\n}\n\nconst cpuPct     = ((status.cpu || 0) * 100).toFixed(1);\nconst ramPct     = status.memory?.total ? ((status.memory.used / status.memory.total) * 100).toFixed(1) : 'N/A';\nconst rootPct    = status.rootfs?.total ? ((status.rootfs.used / status.rootfs.total) * 100).toFixed(1) : 'N/A';\nconst uptimeDays = status.uptime ? (status.uptime / 86400).toFixed(1) : 'N/A';\n\nconst cpuTemp  = temp['k10temp-pci-00c3']?.Tctl?.temp1_input  ?? 'N/A';\nconst gpuTemp  = temp['amdgpu-pci-0500']?.edge?.temp1_input   ?? 'N/A';\nconst nvmeTemp = temp['nvme-pci-0400']?.Composite?.temp1_input ?? 'N/A';\n\nconst cpuSt   = label(cpuPct,  80, 95);\nconst ramSt   = label(ramPct,  85, 95);\nconst rootSt  = label(rootPct, 80, 90);\nconst cpuTSt  = label(cpuTemp, 85, 95);\nconst nvmeTSt = label(nvmeTemp, 70, 80);\n\nconst storageLines = disk.map(d =>\n  `- ${d.storage} (${d.type}): ${(d.used_fraction * 100).toFixed(1)}% used, ${(d.avail / 1073741824).toFixed(1)} GB free [${label(d.used_fraction * 100, 80, 90)}]`\n).join('\\n');\n\nconst warns = [];\nif (cpuSt   !== 'OK') warns.push(`CPU ${cpuPct}%`);\nif (ramSt   !== 'OK') warns.push(`RAM ${ramPct}%`);\nif (rootSt  !== 'OK') warns.push(`root disk ${rootPct}%`);\nif (cpuTSt  !== 'OK') warns.push(`CPU temp ${cpuTemp}\u00b0C`);\nif (nvmeTSt !== 'OK') warns.push(`NVMe ${nvmeTemp}\u00b0C`);\ndisk.forEach(d => {\n  if (label(d.used_fraction * 100, 80, 90) !== 'OK')\n    warns.push(`${d.storage} ${(d.used_fraction * 100).toFixed(0)}%`);\n});\nconst warnsText = warns.length ? warns.join(', ') : 'None';\n\nconst formattedText =\n`\u1f4ca *Proxmox* | uptime: ${uptimeDays}d\nCPU: ${cpuPct}% [${cpuSt}] | RAM: ${ramPct}% [${ramSt}] | Root: ${rootPct}% [${rootSt}]\nTemp: CPU ${cpuTemp}\u00b0C [${cpuTSt}] | GPU ${gpuTemp}\u00b0C | NVMe ${nvmeTemp}\u00b0C [${nvmeTSt}]\nStorage:\n${storageLines}\n\u26a0\ufe0f Warnings: ${warnsText}`;\n\n// LLM only writes one casual sentence\nconst prompt = `Proxmox homelab stats: CPU ${cpuPct}%, RAM ${ramPct}%, temps ${cpuTemp}\u00b0C, warnings ${warnsText}.\nWrite one casual sentence (under 12 words, no numbers) describing the overall health.\nSentence:`;\n\nreturn [{ json: { formattedText, prompt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 576],
+      "id": "add9007a-1aa6-4abc-b2fa-ae03a5da120a",
+      "name": "Aggregate Full"
+    },
+    {
+      "parameters": {
+        "chatId": "={{$('Telegram Trigger').item.json.message.chat.id}}",
+        "text": "={{$json.text}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [688, 224],
+      "id": "3fddc100-efa0-4132-bd19-fc5dd1749ab6",
+      "name": "Send Telegram Reply",
+      "webhookId": "7a77ff3a-f5d0-4f99-a0dc-8ce05867af06",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Classify Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Intent": {
+      "main": [
+        [
+          {
+            "node": "Intent Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intent Router": {
+      "main": [
+        [{ "node": "Fetch Temp", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Status (CPU/RAM)", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Status (CPU/RAM)", "type": "main", "index": 0 }],
+        [{ "node": "Fetch Disk", "type": "main", "index": 0 }],
+        [
+          { "node": "PVE Status", "type": "main", "index": 0 },
+          { "node": "PVE RAW Tem", "type": "main", "index": 0 },
+          { "node": "PVE Disk Usage", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Temp": {
+      "main": [
+        [
+          {
+            "node": "Format Temp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Status (CPU/RAM)": {
+      "main": [
+        [
+          {
+            "node": "Format CPU or RAM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Disk": {
+      "main": [
+        [
+          {
+            "node": "Format Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Temp": {
+      "main": [[{ "node": "Send Telegram Reply", "type": "main", "index": 0 }]]
+    },
+    "Format CPU or RAM": {
+      "main": [[{ "node": "Send Telegram Reply", "type": "main", "index": 0 }]]
+    },
+    "Format Disk": {
+      "main": [[{ "node": "Send Telegram Reply", "type": "main", "index": 0 }]]
+    },
+    "PVE Status": {
+      "main": [[{ "node": "Merge Full", "type": "main", "index": 0 }]]
+    },
+    "PVE RAW Tem": {
+      "main": [[{ "node": "Merge Full", "type": "main", "index": 1 }]]
+    },
+    "PVE Disk Usage": {
+      "main": [[{ "node": "Merge Full", "type": "main", "index": 2 }]]
+    },
+    "Merge Full": {
+      "main": [[{ "node": "Aggregate Full", "type": "main", "index": 0 }]]
+    },
+    "Aggregate Full": {
+      "main": [[{ "node": "Ollama Tinyllama", "type": "main", "index": 0 }]]
+    },
+    "Ollama Tinyllama": {
+      "main": [[{ "node": "Compose Reply", "type": "main", "index": 0 }]]
+    },
+    "Compose Reply": {
+      "main": [[{ "node": "Send Telegram Reply", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "e817841d-fc29-4c3d-b664-0068f33714e4",
+  "meta": {
+    "instanceId": "f64e3d63504ad1d7f005ba30acf82b7cd3a28576038a02bcc8099ca954616617"
+  },
+  "id": "02lyEVGCrYJuT8Cu",
+  "tags": []
+}

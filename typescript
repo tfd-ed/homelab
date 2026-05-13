@@ -1,80 +1,0 @@
-Script started on Wed May  6 09:49:43 2026
-[1m[7m%[27m[1m[0m                                                                                                              [0m[27m[24m[J(base) kimang@Kims-MacBook-Pro-16 homelab-journey % [K[?2004hlls[?2004l
-README.md	diagram		script		terraform
-ansible		docs		ssh-keys	typescript
-[1m[7m%[27m[1m[0m                                                                                                              [0m[27m[24m[J(base) kimang@Kims-MacBook-Pro-16 homelab-journey % [K[?2004hsscs  ccd scripts [?2004l
-[1m[7m%[27m[1m[0m                                                                                                              [0m[27m[24m[J(base) kimang@Kims-MacBook-Pro-16 script % [K[?2004h../[7m./script/run-proxmox-node-server-setup.sh[27m[41D[27m.[27m/[27ms[27mc[27mr[27mi[27mp[27mt[27m/[27mr[27mu[27mn[27m-[27mp[27mr[27mo[27mx[27mm[27mo[27mx[27m-[27mn[27mo[27md[27me[27m-[27ms[27me[27mr[27mv[27me[27mr[27m-[27ms[27me[27mt[27mu[27mp[27m.[27ms[27m                                         .  [7m./script/run-proxmox-node-server-setup.sh[27m[41D[27m.[27m/[27ms[27mc[27mr[27mi[27mp[27mt[27m/[27mr[27mu[27mn[27m-[27mp[27mr[27mo[27mx[27mm[27mo[27mx[27m-[27mn[27mo[27md[27me[27m-[27ms[27me[27mr[27mv[27me[27mr[27m-[27ms[27me[27mt[27mu[27mp[27m.[27ms[27mh[?2004l
-zsh: no such file or directory: ./script/run-proxmox-node-server-setup.sh
-[1m[7m%[27m[1m[0m                                                                                                              [0m[27m[24m[J(base) kimang@Kims-MacBook-Pro-16 script % [K[?2004hlls[?2004l
-cleanup-known-hosts.sh			run-monitoring-setup.sh
-generate-ssh-keys.sh			run-n8n-setup.sh
-run-ai-vm-setup.sh			run-proxmox-node-server-setup.sh
-run-database-setup.sh			setup-k8s-complete.sh
-run-k8s-dashboard-setup.sh		setup-telegram-bot.py
-run-monitoring-dashboards-setup.sh
-[1m[7m%[27m[1m[0m                                                                                                              [0m[27m[24m[J(base) kimang@Kims-MacBook-Pro-16 script % [K[?2004hccd ..[?2004l
-[1m[7m%[27m[1m[0m                                                                                                              [0m[27m[24m[J(base) kimang@Kims-MacBook-Pro-16 homelab-journey % [K[?2004h[7m./script/run-proxmox-node-server-setup.sh[27m[41D[27m.[27m/[27ms[27mc[27mr[27mi[27mp[27mt[27m/[27mr[27mu[27mn[27m-[27mp[27mr[27mo[27mx[27mm[27mo[27mx[27m-[27mn[27mo[27md[27me[27m-[27ms[27me[27mr[27mv[27me[27mr[27m-[27ms[27me[27mt[27mu[27mp[27m.[27ms[27mh[?2004l
-[0;32m========================================[0m
-[0;32mProxmox Temperature Server Setup[0m
-[0;32m========================================[0m
-
-[1;33mTarget host group: proxmox[0m
-
-[1;35m[WARNING]: Invalid characters were found in group names but not replaced, use -vvvv to see details[0m
-[1;35m[WARNING]: Found both group and host with same name: ci-cd[0m
-
-PLAY [Setup Temperature Monitor Node.js Server on Proxmox Host] **********************************************
-
-TASK [Gathering Facts] ***************************************************************************************
-[1;35m[WARNING]: Host 'proxmox-host' is using the discovered Python interpreter at '/usr/bin/python3.13', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.[0m
-[0;32mok: [proxmox-host][0m
-
-TASK [Install prerequisites] *********************************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-TASK [Install NVM] *******************************************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-TASK [Install Node.js 22 LTS via NVM] ************************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-TASK [Resolve node binary path] ******************************************************************************
-[0;32mok: [proxmox-host][0m
-
-TASK [Create application directory] **************************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-TASK [Deploy package.json] ***********************************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-TASK [Deploy Express application (app.js)] *******************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-TASK [Check if node_modules exists] **************************************************************************
-[0;32mok: [proxmox-host][0m
-
-TASK [Install npm dependencies] ******************************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-TASK [Deploy systemd service unit] ***************************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-TASK [Enable and start temperature-server] *******************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-RUNNING HANDLER [Restart temperature-server] *****************************************************************
-[0;33mchanged: [proxmox-host][0m
-
-PLAY RECAP ***************************************************************************************************
-[0;33mproxmox-host[0m               : [0;32mok=13  [0m [0;33mchanged=10  [0m unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
-
-
-[0;32mSetup complete![0m
-[0;32mEndpoints available on Proxmox host:[0m
-  GET /health            – liveness check
-  GET /temperature       – all sensor readings
-  GET /temperature/cpu   – CPU/core temperatures only
-  GET /temperature/raw   – raw sensors -j output
-
-[1;33mDefault port: 3000  (override with PORT env var in the service unit)[0m
-[1m[7m%[27m[1m[0m                                                                                                              [0m[27m[24m[J(base) kimang@Kims-MacBook-Pro-16 homelab-journey % [K[?2004h

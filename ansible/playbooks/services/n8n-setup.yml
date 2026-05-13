@@ -89,6 +89,7 @@
     n8n_db_port: 5432
     n8n_db_name: n8n
     n8n_db_user: n8n
+    n8n_domain: "n8n.tfdevs.com"
     n8n_db_password: "tfd8n8" # MUST MATCH DATABASE PASSWORD!
     n8n_encryption_key: "change_this_to_random_string_32_chars" # CHANGE THIS! Generate with: openssl rand -hex 16
     n8n_webhook_url: "https://n8n.tfdevs.com" # Change to your domain if using reverse proxy
@@ -169,10 +170,11 @@
                 - DB_POSTGRESDB_PASSWORD={{ n8n_db_password }}
                 
                 # n8n Configuration
-                - N8N_HOST={{ n8n_webhook_url }}
+                - N8N_HOST={{ n8n_domain }}
                 - N8N_PORT=5678
-                - N8N_PROTOCOL=http
-                - WEBHOOK_URL={{ n8n_webhook_url }}/
+                - N8N_PROTOCOL=https
+                - WEBHOOK_URL=https://{{ n8n_domain }}/
+                - N8N_EDITOR_BASE_URL=https://{{ n8n_domain }}/
                 
                 # Security
                 - N8N_ENCRYPTION_KEY={{ n8n_encryption_key }}

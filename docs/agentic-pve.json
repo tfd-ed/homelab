@@ -1,0 +1,340 @@
+{
+  "name": "My workflow 4",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [-576, 272],
+      "id": "9d64ea35-e824-4bd5-a025-166ea4f21a78",
+      "name": "Telegram Trigger",
+      "webhookId": "9d2bcf91-5b90-4023-b73f-88d826f0b778",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Telegram Trigger').item.json.message.text }}",
+        "options": {
+          "systemMessage": "You are a Proxmox VE infrastructure assistant monitoring the homelab node 'pve' at 192.168.100.50.\n\nYou MUST use your tools to answer every question. Never answer from memory or general knowledge — always call the appropriate tool first to get real-time data, then use the result to form your reply.\n\nAvailable tools and when to use them:\n- **Raw Temperature data** — use when the user asks about temperature, heat, or thermals\n- **PVE Status** — use when the user asks about node health, CPU, memory, uptime, or kernel\n- **PVE storage** — use when the user asks about disk space, datastores, or storage usage\n- **PVE VMs** — use when the user asks about virtual machines or QEMU VMs\n- **PVE LXC Containers** — use when the user asks about containers or LXC\n- **PVE Tasks** — use when the user asks about recent activity, tasks, backups, or events\n\nFor general health or status questions, call ALL relevant tools before replying.\n\nAfter retrieving tool results, respond concisely in plain language suitable for Telegram. Highlight any anomalies: CPU/memory >80%, temperatures >75°C, storage >85% full, or VMs/containers unexpectedly stopped."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [-168, 272],
+      "id": "a8bf03e5-c9bf-4b3a-94d9-8e62421e92cf",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "granite3.3:2b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [-448, 528],
+      "id": "18606a23-ff31-41ac-bc2d-3d196490002a",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "MFSd9R18qT5QwwPf",
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request and returns the raw tem data of pve",
+        "url": "http://192.168.100.50:3000/temperature/raw",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [-80, 528],
+      "id": "4ee95981-18e5-4e80-996c-dc57b3544755",
+      "name": "Raw Temperature data"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request and returns the pve status data",
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [48, 528],
+      "id": "435c1fa5-846f-4a4a-8203-06b10cd76224",
+      "name": "PVE Status",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "databaseName": "llm-memory",
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Telegram Trigger').item.json.message.chat.id }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryMongoDbChat",
+      "typeVersion": 1,
+      "position": [-272, 512],
+      "id": "d3d083f7-4262-400d-b79a-18bc23c88a15",
+      "name": "MongoDB Chat Memory",
+      "credentials": {
+        "mongoDb": {
+          "id": "vCANYtCZveCJVls0",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [368, 272],
+      "id": "5bb4fe24-9253-4aa6-92dd-236f8200d598",
+      "name": "Send a text message",
+      "webhookId": "fc43bcbf-adb6-4e29-89e4-0d2aaf485145",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request and returns the pve storage data",
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/storage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [192, 512],
+      "id": "cec9bc21-61a0-4294-b901-3f24f15ba46e",
+      "name": "PVE storage",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request and returns the list of QEMU virtual machines on the pve node with their status, CPU, and memory info",
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/qemu",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [336, 512],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-0c1d2e3f4a5b",
+      "name": "PVE VMs",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request and returns the list of LXC containers on the pve node with their status and resource usage",
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/lxc",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [480, 512],
+      "id": "f2a3b4c5-d6e7-4f8a-9b0c-1d2e3f4a5b6c",
+      "name": "PVE LXC Containers",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Makes an HTTP request and returns the recent task list on the pve node, showing the latest operations such as VM start/stop, backups, and migrations",
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/tasks",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [624, 512],
+      "id": "a3b4c5d6-e7f8-4a9b-0c1d-2e3f4a5b6c7d",
+      "name": "PVE Tasks",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Raw Temperature data": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PVE Status": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MongoDB Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PVE storage": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PVE VMs": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PVE LXC Containers": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PVE Tasks": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "00c8c99b-8236-42c2-b6c6-aa33fa0c20f9",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f64e3d63504ad1d7f005ba30acf82b7cd3a28576038a02bcc8099ca954616617"
+  },
+  "id": "UI7DiBiPxAJUATBm",
+  "tags": []
+}

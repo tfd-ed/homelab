@@ -2,7 +2,10 @@
 """
 setup-telegram-bot.py
 Register commands, set descriptions, and send branded welcome/info messages
-for the Homelab AI Telegram Bot.
+for the Homelab Aggregate Telegram Bot.
+
+Workflow: Telegram Trigger → PVE Status + PVE RAW Temp + PVE Disk Usage
+          → Merge → Aggregate (JS) → Ollama TinyLlama → Send Telegram Reply
 
 Usage:
     python3 setup-telegram-bot.py --token <BOT_TOKEN>              # setup only
@@ -22,31 +25,17 @@ import urllib.error
 # Bot commands (visible in Telegram's / menu)
 # ---------------------------------------------------------------------------
 COMMANDS = [
-    ("start",       "Welcome message & help"),
-    ("help",        "Show all available commands"),
-    ("status",      "Check if all homelab nodes are up"),
-    ("cpu",         "CPU usage across all nodes"),
-    ("memory",      "Memory usage across all nodes"),
-    ("disk",        "Disk usage across all nodes"),
-    ("k8s",         "Kubernetes cluster health"),
-    ("database",    "Database VM status"),
-    ("cicd",        "CI/CD VM status"),
-    ("monitoring",  "Monitoring VM (Prometheus/Grafana) status"),
+    ("start",  "Welcome message & help"),
+    ("help",   "Show all available commands"),
+    ("status", "Full Proxmox status: CPU, RAM, disk, temperatures"),
 ]
 
 # ---------------------------------------------------------------------------
-# Inline keyboard buttons shown after every reply (also in welcome/help)
-# Format: (callback_data sent to n8n, button label)
+# Inline keyboard buttons — each triggers the aggregate workflow via n8n
+# Format: (message text sent to n8n, button label)
 # ---------------------------------------------------------------------------
 QUICK_QUESTIONS = [
-    ("Are all my homelab nodes up?",              "🔍 Node status"),
-    ("What is the CPU usage on all nodes?",       "💻 CPU usage"),
-    ("What is the memory usage?",                 "🧠 Memory usage"),
-    ("What is the disk usage?",                   "💾 Disk usage"),
-    ("Is the Kubernetes cluster healthy?",        "☸️  K8s health"),
-    ("Is the database VM running?",               "🗄️  Database"),
-    ("Show me the CI/CD VM status",               "🔧 CI/CD"),
-    ("Is the monitoring VM running?",             "📊 Monitoring"),
+    ("status", "📊 Full status report"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -60,38 +49,32 @@ INFO_CARDS = [
             "CPU:   AMD Ryzen 7 7730U  (8C/16T, up to 4.5 GHz)\n"
             "RAM:   64 GB DDR4\n"
             "SSD:   1 TB NVMe\n"
-            "OS:    Proxmox VE 9.1.1"
+            "OS:    Proxmox VE 9.1"
         ),
     ),
     (
-        "🌐  Network map",
+        "🌐  Network",
         (
             "192.168.100.50   — Proxmox host\n"
-            "192.168.100.201-203 — K8s nodes\n"
-            "192.168.100.205  — Database (Postgres/Mongo/Redis)\n"
-            "192.168.100.210  — Nginx gateway\n"
-            "192.168.100.220  — Monitoring (Prometheus/Grafana)\n"
-            "192.168.100.230  — n8n\n"
-            "192.168.100.240  — CI/CD runner"
+            "192.168.100.230  — n8n (workflow engine)\n"
+            "192.168.100.250  — Ollama (TinyLlama inference)"
         ),
     ),
     (
         "🛠️  Useful links",
         (
-            "Proxmox:   https://192.168.100.50:8006\n"
-            "Grafana:   http://192.168.100.220:3000\n"
-            "Prometheus:http://192.168.100.220:9090\n"
-            "n8n:       http://192.168.100.230:5678"
+            "Proxmox: https://192.168.100.50:8006\n"
+            "n8n:     http://192.168.100.230:5678"
         ),
     ),
 ]
 
 BOT_DESCRIPTION = (
-    "Homelab AI assistant powered by TinyLlama + Prometheus. "
-    "Ask me about your server health, CPU, memory, disk, Kubernetes, "
-    "or any of your homelab VMs."
+    "Proxmox aggregate monitor powered by TinyLlama. "
+    "Send any message to get a live status report: CPU, RAM, disk usage, "
+    "temperatures, and an AI-generated health note."
 )
-BOT_SHORT_DESCRIPTION = "Homelab infrastructure AI assistant"
+BOT_SHORT_DESCRIPTION = "Proxmox status reporter with AI health note"
 
 
 # ---------------------------------------------------------------------------
@@ -192,15 +175,15 @@ def send_welcome(token: str, chat_id: str):
     print(f"Sending welcome message to {chat_id}...")
 
     text = (
-        "👋 *Homelab AI Assistant*\n\n"
-        "I monitor your Proxmox homelab in real time using *Prometheus* metrics "
-        "and answer questions using *TinyLlama* running locally.\n\n"
-        "💡 *What I can do:*\n"
-        "• Check if any VM or service is down\n"
-        "• Report CPU, memory, and disk usage\n"
-        "• Summarise Kubernetes cluster health\n"
-        "• Answer free-form questions about your infrastructure\n\n"
-        "*Tap a button below or type your question:*"
+        "👋 *Homelab Monitor*\n\n"
+        "I fetch live *Proxmox* metrics and generate a health report using "
+        "*TinyLlama* running locally.\n\n"
+        "💡 *What I report:*\n"
+        "• CPU, RAM, and root disk usage (OK / WARN / CRIT)\n"
+        "• CPU, GPU, and NVMe temperatures\n"
+        "• Storage pool usage\n"
+        "• AI-generated one-line health note\n\n"
+        "*Send any message or tap below to get a status report:*"
     )
 
     ok = send_message(token, chat_id, text, keyboard=build_quick_keyboard())
@@ -237,8 +220,8 @@ def send_help(token: str, chat_id: str):
 
     lines += [
         "",
-        "Or just type any question in plain English.",
-        "Tap a button for instant answers:",
+        "Or send any message — it will trigger a live Proxmox status report.",
+        "Tap the button below for an instant snapshot:",
     ]
 
     ok = send_message(token, chat_id, "\n".join(lines), keyboard=build_quick_keyboard())

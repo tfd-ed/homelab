@@ -1,0 +1,352 @@
+{
+  "name": "Homelab Planner Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [-800, 224],
+      "id": "aa000001-0000-0000-0000-000000000001",
+      "name": "Telegram Trigger",
+      "webhookId": "cd3bed2f-e966-4d43-8a7e-4708ce2a3ea2",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the Planner prompt.\n// The Planner's only job: decide which tools to fetch based on the user's message.\nconst userMessage = ($input.first().json.message?.text || '').trim();\n\nconst prompt =\n`You are a homelab monitoring planner. Choose the minimum tools needed to answer the user.\n\nAvailable tools: [\"cpu\", \"memory\", \"temperature\", \"disk\"]\n\nRules:\n- \"cpu\" and \"memory\" share one API call — include both if either is relevant\n- \"temperature\" covers CPU, GPU, NVMe heat\n- \"disk\" covers storage pools and free space\n- For general health or unclear queries, include all tools\n- Respond ONLY with valid compact JSON, no markdown, no explanation\n\nExamples:\n  User: why is proxmox slow   → {\"tools\":[\"cpu\",\"memory\",\"disk\"]}\n  User: is anything hot?      → {\"tools\":[\"temperature\"]}\n  User: check disk space      → {\"tools\":[\"disk\"]}\n  User: status                → {\"tools\":[\"cpu\",\"memory\",\"temperature\",\"disk\"]}\n\nUser message: \"${userMessage}\"\nJSON:`;\n\nreturn [{ json: { prompt, userMessage } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-576, 224],
+      "id": "aa000002-0000-0000-0000-000000000002",
+      "name": "Planner Prompt",
+      "notes": "Builds the planner prompt. No data fetched yet."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gemma2:2b\",\n  \"prompt\": {{ JSON.stringify($json.prompt) }},\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-352, 224],
+      "id": "aa000003-0000-0000-0000-000000000003",
+      "name": "Ollama Planner",
+      "notes": "LLM decides which tools are needed. Only call — stays focused on routing."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the LLM JSON output. Fall back to all tools if malformed.\nconst raw = ($input.first().json.response || '').trim();\nconst userMessage = $('Planner Prompt').first().json.userMessage;\n\nlet tools = ['cpu', 'memory', 'temperature', 'disk']; // safe default\n\ntry {\n  // Strip potential markdown fences or leading text before {}\n  const match = raw.match(/\\{[\\s\\S]*?\\}/);\n  if (match) {\n    const parsed = JSON.parse(match[0]);\n    if (Array.isArray(parsed.tools) && parsed.tools.length > 0) {\n      tools = parsed.tools.map(t => t.toLowerCase().trim());\n    }\n  }\n} catch (e) {\n  // keep default\n}\n\nreturn [{\n  json: {\n    tools,\n    userMessage,\n    needsStatus: tools.includes('cpu') || tools.includes('memory'),\n    needsTemp:   tools.includes('temperature'),\n    needsDisk:   tools.includes('disk')\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-128, 224],
+      "id": "aa000004-0000-0000-0000-000000000004",
+      "name": "Parse Tool List",
+      "notes": "Parses LLM JSON. Extracts needsStatus / needsTemp / needsDisk flags for IF routing."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "if-status-cond",
+              "leftValue": "={{ $json.needsStatus }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equal" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [96, 48],
+      "id": "aa000005-0000-0000-0000-000000000005",
+      "name": "IF needs_status"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": { "allowUnauthorizedCerts": true }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [320, -80],
+      "id": "aa000006-0000-0000-0000-000000000006",
+      "name": "Fetch Status",
+      "credentials": {
+        "httpCustomAuth": { "id": "X7hwUIEIvctXPw4X", "name": "Proxmox Auth" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { skipped: true, source: 'status' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 80],
+      "id": "aa000007-0000-0000-0000-000000000007",
+      "name": "Skip Status"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "if-temp-cond",
+              "leftValue": "={{ $json.needsTemp }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equal" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [96, 224],
+      "id": "aa000008-0000-0000-0000-000000000008",
+      "name": "IF needs_temp"
+    },
+    {
+      "parameters": {
+        "url": "http://192.168.100.50:3000/temperature/raw",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [320, 144],
+      "id": "aa000009-0000-0000-0000-000000000009",
+      "name": "Fetch Temp"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { skipped: true, source: 'temp' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 304],
+      "id": "aa000010-0000-0000-0000-000000000010",
+      "name": "Skip Temp"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "if-disk-cond",
+              "leftValue": "={{ $json.needsDisk }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equal" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [96, 400],
+      "id": "aa000011-0000-0000-0000-000000000011",
+      "name": "IF needs_disk"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/storage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": { "allowUnauthorizedCerts": true }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [320, 320],
+      "id": "aa000012-0000-0000-0000-000000000012",
+      "name": "Fetch Disk",
+      "credentials": {
+        "httpCustomAuth": { "id": "X7hwUIEIvctXPw4X", "name": "Proxmox Auth" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { skipped: true, source: 'disk' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 480],
+      "id": "aa000013-0000-0000-0000-000000000013",
+      "name": "Skip Disk"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [544, 224],
+      "id": "aa000014-0000-0000-0000-000000000014",
+      "name": "Collect Data",
+      "notes": "Waits for all 3 branches (status/temp/disk). Each always produces one item — either real data or a skip marker."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize raw API responses into compact structured JSON.\n// items[0] = status or skip, items[1] = temp or skip, items[2] = disk or skip\nconst items = $input.all();\n\nconst statusItem = items[0]?.json;\nconst tempItem   = items[1]?.json;\nconst diskItem   = items[2]?.json;\n\nconst metrics = {};\n\n// --- CPU & Memory (PVE Status) ---\nif (!statusItem?.skipped && statusItem?.data) {\n  const s = statusItem.data;\n  metrics.cpu_percent  = parseFloat(((s.cpu || 0) * 100).toFixed(1));\n  metrics.load_avg     = (s.loadavg || []).map(Number);\n  metrics.uptime_days  = s.uptime ? parseFloat((s.uptime / 86400).toFixed(1)) : null;\n  if (s.memory?.total) {\n    metrics.memory_percent  = parseFloat(((s.memory.used / s.memory.total) * 100).toFixed(1));\n    metrics.memory_used_gb  = parseFloat((s.memory.used  / 1073741824).toFixed(1));\n    metrics.memory_total_gb = parseFloat((s.memory.total / 1073741824).toFixed(1));\n  }\n  if (s.rootfs?.total) {\n    metrics.root_disk_percent = parseFloat(((s.rootfs.used / s.rootfs.total) * 100).toFixed(1));\n  }\n  if (s.swap?.total) {\n    metrics.swap_percent = parseFloat(((s.swap.used / s.swap.total) * 100).toFixed(1));\n  }\n}\n\n// --- Temperature ---\nif (!tempItem?.skipped && tempItem?.data) {\n  const t = tempItem.data;\n  const cpuT  = t['k10temp-pci-00c3']?.Tctl?.temp1_input;\n  const gpuT  = t['amdgpu-pci-0500']?.edge?.temp1_input;\n  const nvmeT = t['nvme-pci-0400']?.Composite?.temp1_input;\n  if (cpuT  != null) metrics.cpu_temp_c  = cpuT;\n  if (gpuT  != null) metrics.gpu_temp_c  = gpuT;\n  if (nvmeT != null) metrics.nvme_temp_c = nvmeT;\n}\n\n// --- Disk/Storage ---\nif (!diskItem?.skipped && Array.isArray(diskItem?.data)) {\n  metrics.storage = diskItem.data.map(d => ({\n    name:         d.storage,\n    type:         d.type,\n    used_percent: parseFloat((d.used_fraction * 100).toFixed(1)),\n    free_gb:      parseFloat((d.avail  / 1073741824).toFixed(1)),\n    total_gb:     parseFloat((d.total  / 1073741824).toFixed(1))\n  }));\n}\n\nconst tools       = $('Parse Tool List').first().json.tools;\nconst userMessage = $('Parse Tool List').first().json.userMessage;\n\nreturn [{ json: { metrics, tools, userMessage } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [768, 224],
+      "id": "aa000015-0000-0000-0000-000000000015",
+      "name": "Normalize Metrics",
+      "notes": "Converts raw API responses into compact structured JSON. This is what the Analyzer LLM receives — no raw Proxmox blobs."
+    },
+    {
+      "parameters": {
+        "jsCode": "const { metrics, tools, userMessage } = $input.first().json;\n\n// Pre-compute anomalies in JS — thresholds are NOT the LLM's job\nconst flags = [];\nif (metrics.cpu_percent    >= 80) flags.push(`CPU at ${metrics.cpu_percent}% (high)`);\nif (metrics.load_avg?.[0]  >= 8)  flags.push(`Load avg ${metrics.load_avg[0]} (very high — likely I/O wait or runaway process)`);\nif (metrics.memory_percent >= 85) flags.push(`RAM at ${metrics.memory_percent}% (high — ${metrics.memory_used_gb}/${metrics.memory_total_gb} GB)`);\nif (metrics.root_disk_percent >= 80) flags.push(`Root disk at ${metrics.root_disk_percent}%`);\nif (metrics.cpu_temp_c     >= 85) flags.push(`CPU temp ${metrics.cpu_temp_c}°C (high — check fan/airflow)`);\nif (metrics.nvme_temp_c    >= 70) flags.push(`NVMe ${metrics.nvme_temp_c}°C (warm)`);\n(metrics.storage || []).forEach(s => {\n  if (s.used_percent >= 80) flags.push(`Storage ${s.name}: ${s.used_percent}% used (${s.free_gb} GB free)`);\n});\n\nconst flagsText = flags.length > 0\n  ? flags.join('; ')\n  : 'none — all metrics within normal range';\n\nconst metricsJson = JSON.stringify(metrics, null, 2);\n\n// The Analyzer only writes the narrative — all numbers are pre-computed above\nconst prompt =\n`You are a homelab monitoring AI. A user asked: \"${userMessage}\"\n\nSystem metrics (only what was fetched):\n${metricsJson}\n\nPre-flagged anomalies: ${flagsText}\n\nRules:\n- If anomalies exist: explain the most likely root cause, suggest one concrete next step\n- If all normal: one short sentence confirming it\n- Do NOT repeat the numbers — they are shown above\n- Avoid filler phrases like \"based on the data\" or \"it appears\"\n- Under 60 words\n\nAnalysis:`;\n\nreturn [{ json: { prompt, metrics, flags } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [992, 224],
+      "id": "aa000016-0000-0000-0000-000000000016",
+      "name": "Analyzer Prompt",
+      "notes": "Anomaly detection is done in JS. LLM only writes the causal narrative under 60 words."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gemma2:2b\",\n  \"prompt\": {{ JSON.stringify($json.prompt) }},\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1216, 224],
+      "id": "aa000017-0000-0000-0000-000000000017",
+      "name": "Ollama Analyzer",
+      "notes": "Second LLM call — focused only on causal analysis of pre-flagged anomalies."
+    },
+    {
+      "parameters": {
+        "jsCode": "const llmRaw = ($input.first().json.response || '').trim();\nconst metrics = $('Normalize Metrics').first().json.metrics;\nconst flags   = $('Analyzer Prompt').first().json.flags;\n\n// Strip echoed prompt prefix if LLM repeated it\nconst analysis = llmRaw\n  .replace(/^analysis[:\\s]*/i, '')\n  .replace(/^note[:\\s]*/i, '')\n  .split('\\n')\n  .filter(l => l.trim())\n  .slice(0, 6)\n  .join('\\n')\n  .trim();\n\nconst hasIssues = flags.length > 0;\nconst icon      = hasIssues ? '⚠️' : '✅';\nconst headline  = hasIssues ? '*Issues detected*' : '*Systems nominal*';\n\n// Compact metric header — only show what was actually fetched\nconst parts = [];\nif (metrics.cpu_percent    != null) parts.push(`CPU: ${metrics.cpu_percent}%`);\nif (metrics.memory_percent != null) parts.push(`RAM: ${metrics.memory_percent}%`);\nif (metrics.cpu_temp_c     != null) parts.push(`Temp: ${metrics.cpu_temp_c}°C`);\nif (metrics.uptime_days    != null) parts.push(`Up: ${metrics.uptime_days}d`);\n\nconst storageLines = (metrics.storage || [])\n  .map(s => `  ${s.name}: ${s.used_percent}% (${s.free_gb} GB free)`)\n  .join('\\n');\n\nlet text = `${icon} ${headline}\\n`;\nif (parts.length)  text += `${parts.join(' | ')}\\n`;\nif (storageLines)  text += `Storage:\\n${storageLines}\\n`;\nif (hasIssues) {\n  text += `\\n🔴 ${flags.join('\\n🔴 ')}\\n`;\n}\ntext += `\\n${analysis}`;\n\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 224],
+      "id": "aa000018-0000-0000-0000-000000000018",
+      "name": "Format Response",
+      "notes": "Builds the final Telegram message. Flags are listed deterministically; LLM analysis is appended underneath."
+    },
+    {
+      "parameters": {
+        "chatId": "={{$('Telegram Trigger').item.json.message.chat.id}}",
+        "text": "={{$json.text}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1664, 224],
+      "id": "aa000019-0000-0000-0000-000000000019",
+      "name": "Send Telegram Reply",
+      "webhookId": "7a77ff3a-f5d0-4f99-a0dc-8ce05867af06",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{ "node": "Planner Prompt", "type": "main", "index": 0 }]]
+    },
+    "Planner Prompt": {
+      "main": [[{ "node": "Ollama Planner", "type": "main", "index": 0 }]]
+    },
+    "Ollama Planner": {
+      "main": [[{ "node": "Parse Tool List", "type": "main", "index": 0 }]]
+    },
+    "Parse Tool List": {
+      "main": [[
+        { "node": "IF needs_status", "type": "main", "index": 0 },
+        { "node": "IF needs_temp",   "type": "main", "index": 0 },
+        { "node": "IF needs_disk",   "type": "main", "index": 0 }
+      ]]
+    },
+    "IF needs_status": {
+      "main": [
+        [{ "node": "Fetch Status", "type": "main", "index": 0 }],
+        [{ "node": "Skip Status",  "type": "main", "index": 0 }]
+      ]
+    },
+    "IF needs_temp": {
+      "main": [
+        [{ "node": "Fetch Temp", "type": "main", "index": 0 }],
+        [{ "node": "Skip Temp",  "type": "main", "index": 0 }]
+      ]
+    },
+    "IF needs_disk": {
+      "main": [
+        [{ "node": "Fetch Disk", "type": "main", "index": 0 }],
+        [{ "node": "Skip Disk",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Status": { "main": [[{ "node": "Collect Data", "type": "main", "index": 0 }]] },
+    "Skip Status":  { "main": [[{ "node": "Collect Data", "type": "main", "index": 0 }]] },
+    "Fetch Temp":   { "main": [[{ "node": "Collect Data", "type": "main", "index": 1 }]] },
+    "Skip Temp":    { "main": [[{ "node": "Collect Data", "type": "main", "index": 1 }]] },
+    "Fetch Disk":   { "main": [[{ "node": "Collect Data", "type": "main", "index": 2 }]] },
+    "Skip Disk":    { "main": [[{ "node": "Collect Data", "type": "main", "index": 2 }]] },
+    "Collect Data":      { "main": [[{ "node": "Normalize Metrics", "type": "main", "index": 0 }]] },
+    "Normalize Metrics": { "main": [[{ "node": "Analyzer Prompt",   "type": "main", "index": 0 }]] },
+    "Analyzer Prompt":   { "main": [[{ "node": "Ollama Analyzer",   "type": "main", "index": 0 }]] },
+    "Ollama Analyzer":   { "main": [[{ "node": "Format Response",   "type": "main", "index": 0 }]] },
+    "Format Response":   { "main": [[{ "node": "Send Telegram Reply","type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "planner-agent-v1-0000000000000001",
+  "meta": {
+    "instanceId": "f64e3d63504ad1d7f005ba30acf82b7cd3a28576038a02bcc8099ca954616617"
+  },
+  "id": "HomelabPlannerV1",
+  "tags": []
+}

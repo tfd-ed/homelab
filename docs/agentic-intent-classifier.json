@@ -1,0 +1,745 @@
+{
+  "name": "Aggregate Agent with LLM Intent (granite3.3:2b) v5",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [-688, 176],
+      "id": "3e85596c-77be-4f47-84cd-fb159271636d",
+      "name": "Telegram Trigger",
+      "webhookId": "cd3bed2f-e966-4d43-8a7e-4708ce2a3ea2",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'granite3.3:2b', prompt: 'Classify the following homelab monitoring message into exactly one intent word.\\n\\nAvailable intents:\\n- temp: temperature, heat, cooling, thermal, overheating\\n- cpu: CPU, processor, load, compute, utilization\\n- memory: RAM, swap, memory, heap, out-of-memory\\n- disk: storage, disk, space, volume, partition\\n- full: general status, multiple topics, or anything else\\n\\nRules: reply with ONE word only (temp / cpu / memory / disk / full). No explanation, no punctuation.\\n\\nUser message: ' + ($input.first().json.message?.text || ''), stream: false }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-560, 176],
+      "id": "c1d2e3f4-a5b6-4789-0abc-def012345678",
+      "name": "LLM Classify Intent",
+      "notes": "Calls local Ollama (gemma2:2b) to classify user intent. Returns one of: temp | cpu | memory | disk | full."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the LLM response and normalise to a known intent.\n// Valid intents: temp | cpu | memory | disk | full\nconst raw = ($input.first().json?.response || '').trim().toLowerCase().replace(/[^a-z]/g, '');\nconst userMessage = $('Telegram Trigger').first().json.message?.text || '';\n\nconst valid = ['temp', 'cpu', 'memory', 'disk', 'full'];\nconst intent = valid.includes(raw) ? raw : 'full';\n\nreturn [{ json: { intent, userMessage } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-340, 176],
+      "id": "f9e8d7c6-b5a4-4321-9876-543210fedcba",
+      "name": "Parse LLM Intent",
+      "notes": "Normalises LLM output to one of: temp | cpu | memory | disk | full. Falls back to 'full' for unrecognised output."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "temp",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "72141342-35fa-4819-b449-56cb4f6c754a"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "temp"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "cpu",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "90fc7f81-beee-4b8c-9931-2070e74a5c38"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cpu"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "memory",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "ccf79867-d80e-440e-97a2-c32517688799"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "memory"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "disk",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "ff4b9823-6d6c-407c-8b30-131804131c33"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "disk"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "full",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "aabb1122-full-4444-8888-ccccddddeeee"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "full"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [-240, 144],
+      "id": "a26b11dc-ca61-45ce-a297-e42fc8049a54",
+      "name": "Intent Router",
+      "notes": "output 0=temp, 1=cpu, 2=memory, 3=disk, 4=full"
+    },
+    {
+      "parameters": {
+        "url": "http://192.168.100.50:3000/temperature/raw",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-16, -16],
+      "id": "9388056d-16b8-4a73-b8d2-75cdffaca2a1",
+      "name": "Fetch Temp"
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $input.first().json?.data || {};\n\nfunction label(val, w, c) {\n  const n = parseFloat(val);\n  if (isNaN(n)) return '?';\n  return n >= c ? 'CRIT' : n >= w ? 'WARN' : 'OK';\n}\n\nconst cpu  = t['k10temp-pci-00c3']?.Tctl?.temp1_input  ?? 'N/A';\nconst gpu  = t['amdgpu-pci-0500']?.edge?.temp1_input   ?? 'N/A';\nconst nvme = t['nvme-pci-0400']?.Composite?.temp1_input ?? 'N/A';\n\nconst cpuSt  = label(cpu,  85, 95);\nconst nvmeSt = label(nvme, 70, 80);\n\nconst header = `*Temperatures*\\nCPU: ${cpu}°C [${cpuSt}] | GPU: ${gpu}°C | NVMe: ${nvme}°C [${nvmeSt}]`;\n\nconst prompt = `You are a concise homelab assistant. Write ONE short sentence (max 15 words) summarising the thermal status for a Proxmox server given these sensor readings:\n- CPU (k10temp): ${cpu}°C, status ${cpuSt} (warn≥85, crit≥95)\n- GPU (amdgpu): ${gpu}°C\n- NVMe: ${nvme}°C, status ${nvmeSt} (warn≥70, crit≥80)\nBe specific and natural. No markdown, no bullet points.`;\n\nreturn [{ json: { header, prompt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [208, -16],
+      "id": "42dd5c0f-f09b-4ebe-b2cd-8f3e6eb2686d",
+      "name": "Format Temp"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-16, 176],
+      "id": "6898f4d9-330d-40e8-8991-a3331aeb8236",
+      "name": "Fetch Status (CPU/RAM)",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $input.first().json?.data || {};\nconst intent = $('Parse LLM Intent').first().json.intent;\n\nfunction label(val, w, c) {\n  const n = parseFloat(val);\n  if (isNaN(n)) return '?';\n  return n >= c ? 'CRIT' : n >= w ? 'WARN' : 'OK';\n}\n\nconst cpuPct = ((s.cpu || 0) * 100).toFixed(1);\nconst cpuSt  = label(cpuPct, 80, 95);\nconst load   = (s.loadavg || []).join(', ');\n\nconst ramPct = s.memory?.total\n  ? ((s.memory.used / s.memory.total) * 100).toFixed(1) : 'N/A';\nconst ramSt  = label(ramPct, 85, 95);\nconst ramUsedGB = s.memory?.used  ? (s.memory.used  / 1073741824).toFixed(1) : '?';\nconst ramTotGB  = s.memory?.total ? (s.memory.total / 1073741824).toFixed(1) : '?';\nconst swapPct   = s.swap?.total\n  ? ((s.swap.used / s.swap.total) * 100).toFixed(1) : '0.0';\n\nlet header, prompt;\nif (intent === 'cpu') {\n  header = `*CPU*\\nUsage: ${cpuPct}% [${cpuSt}] | Load avg: ${load}`;\n  prompt = `You are a concise homelab assistant. Write ONE short sentence (max 15 words) summarising the CPU status for a Proxmox server:\n- CPU usage: ${cpuPct}%, status ${cpuSt} (warn≥80, crit≥95)\n- Load averages: ${load}\nBe specific and natural. No markdown, no bullet points.`;\n} else {\n  header = `*Memory*\\nRAM: ${ramUsedGB} / ${ramTotGB} GB (${ramPct}%) [${ramSt}] | Swap: ${swapPct}%`;\n  prompt = `You are a concise homelab assistant. Write ONE short sentence (max 15 words) summarising the memory status for a Proxmox server:\n- RAM usage: ${ramUsedGB} GB of ${ramTotGB} GB (${ramPct}%), status ${ramSt} (warn≥85, crit≥95)\n- Swap: ${swapPct}%\nBe specific and natural. No markdown, no bullet points.`;\n}\n\nreturn [{ json: { header, prompt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [208, 176],
+      "id": "009634f6-2e5e-44a8-bf2a-4ef0a1dcb61f",
+      "name": "Format CPU or RAM"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/storage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-16, 368],
+      "id": "6ab21546-25c9-432b-9b6d-26cf878e447e",
+      "name": "Fetch Disk",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const disk = $input.first().json?.data || [];\n\nfunction label(val, w, c) {\n  const n = parseFloat(val);\n  if (isNaN(n)) return '?';\n  return n >= c ? 'CRIT' : n >= w ? 'WARN' : 'OK';\n}\n\nconst lines = disk.map(d => {\n  const pct = (d.used_fraction * 100).toFixed(1);\n  const freeGB = (d.avail / 1073741824).toFixed(1);\n  return `- ${d.storage} (${d.type}): ${pct}% used, ${freeGB} GB free [${label(pct, 80, 90)}]`;\n}).join('\\n');\n\nconst worst = disk.reduce((acc, d) => Math.max(acc, d.used_fraction * 100), 0);\nconst worstSt = label(worst, 80, 90);\n\nconst header = `*Storage*\\n${lines}`;\n\nconst diskSummary = disk.map(d => {\n  const pct = (d.used_fraction * 100).toFixed(1);\n  const freeGB = (d.avail / 1073741824).toFixed(1);\n  return `${d.storage}: ${pct}% used, ${freeGB} GB free`;\n}).join('; ');\n\nconst prompt = `You are a concise homelab assistant. Write ONE short sentence (max 15 words) summarising the storage status for a Proxmox server:\n- Pools: ${diskSummary}\n- Worst pool: ${worst.toFixed(1)}%, status ${worstSt} (warn≥80, crit≥90)\nBe specific and natural. No markdown, no bullet points.`;\n\nreturn [{ json: { header, prompt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [208, 368],
+      "id": "d8e25f6f-0098-4754-baad-23e1ec9cf855",
+      "name": "Format Disk"
+    },
+    {
+      "parameters": {
+        "chatId": "={{$('Telegram Trigger').item.json.message.chat.id}}",
+        "text": "={{$json.text}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, 176],
+      "id": "9465f19c-f788-4d9b-8b54-4d2c334427a4",
+      "name": "Send Telegram Reply",
+      "webhookId": "7a77ff3a-f5d0-4f99-a0dc-8ce05867af06",
+      "credentials": {
+        "telegramApi": {
+          "id": "EnveSHFMbJWEZBzZ",
+          "name": "TFD Homelab Assistant Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gemma2:2b', prompt: $json.prompt, stream: false }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [432, -16],
+      "id": "llm-gen-temp-0001-000000000001",
+      "name": "LLM Generate Temp Reply",
+      "notes": "Calls Ollama to generate a natural language thermal status sentence."
+    },
+    {
+      "parameters": {
+        "jsCode": "const header = $('Format Temp').first().json.header;\nconst sentence = ($input.first().json?.response || '').trim();\nconst text = `${header}\\n_${sentence}_`;\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [656, -16],
+      "id": "parse-llm-temp-0002-000000000002",
+      "name": "Parse LLM Temp Reply",
+      "notes": "Combines the structured header with the LLM-generated sentence."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gemma2:2b', prompt: $json.prompt, stream: false }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [432, 176],
+      "id": "llm-gen-cpu-00003-000000000003",
+      "name": "LLM Generate CPU/RAM Reply",
+      "notes": "Calls Ollama to generate a natural language CPU or RAM status sentence."
+    },
+    {
+      "parameters": {
+        "jsCode": "const header = $('Format CPU or RAM').first().json.header;\nconst sentence = ($input.first().json?.response || '').trim();\nconst text = `${header}\\n_${sentence}_`;\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [656, 176],
+      "id": "parse-llm-cpu-00004-000000000004",
+      "name": "Parse LLM CPU/RAM Reply",
+      "notes": "Combines the structured header with the LLM-generated sentence."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gemma2:2b', prompt: $json.prompt, stream: false }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [432, 368],
+      "id": "llm-gen-disk-0005-000000000005",
+      "name": "LLM Generate Disk Reply",
+      "notes": "Calls Ollama to generate a natural language storage status sentence."
+    },
+    {
+      "parameters": {
+        "jsCode": "const header = $('Format Disk').first().json.header;\nconst sentence = ($input.first().json?.response || '').trim();\nconst text = `${header}\\n_${sentence}_`;\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [656, 368],
+      "id": "parse-llm-disk-0006-000000000006",
+      "name": "Parse LLM Disk Reply",
+      "notes": "Combines the structured header with the LLM-generated sentence."
+    },
+    {
+      "parameters": {
+        "url": "http://192.168.100.50:3000/temperature/raw",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-16, 560],
+      "id": "full-fetch-temp-1111-111111111111",
+      "name": "Fetch Temp (Full)"
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [208, 560],
+      "id": "full-fetch-cpu-22222-222222222222",
+      "name": "Fetch Status (Full)",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://192.168.100.50:8006/api2/json/nodes/pve/storage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [432, 560],
+      "id": "full-fetch-disk-3333-333333333333",
+      "name": "Fetch Disk (Full)",
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "X7hwUIEIvctXPw4X",
+          "name": "Proxmox Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $('Fetch Temp (Full)').first().json?.data || {};\nconst s = $('Fetch Status (Full)').first().json?.data || {};\nconst disk = $('Fetch Disk (Full)').first().json?.data || [];\n\nfunction label(val, w, c) {\n  const n = parseFloat(val);\n  if (isNaN(n)) return 'UNKNOWN';\n  return n >= c ? 'CRIT' : n >= w ? 'WARN' : 'OK';\n}\n\n// Temperatures\nconst cpuTemp  = t['k10temp-pci-00c3']?.Tctl?.temp1_input  ?? 'N/A';\nconst gpuTemp  = t['amdgpu-pci-0500']?.edge?.temp1_input   ?? 'N/A';\nconst nvmeTemp = t['nvme-pci-0400']?.Composite?.temp1_input ?? 'N/A';\nconst cpuTempSt  = label(cpuTemp, 85, 95);\nconst nvmeTempSt = label(nvmeTemp, 70, 80);\n\n// CPU & RAM\nconst cpuPct    = ((s.cpu || 0) * 100).toFixed(1);\nconst load      = (s.loadavg || []).join(', ');\nconst cpuSt     = label(cpuPct, 80, 95);\nconst ramPct    = s.memory?.total ? ((s.memory.used / s.memory.total) * 100).toFixed(1) : 'N/A';\nconst ramSt     = label(ramPct, 85, 95);\nconst ramUsedGB = s.memory?.used  ? (s.memory.used  / 1073741824).toFixed(1) : '?';\nconst ramTotGB  = s.memory?.total ? (s.memory.total / 1073741824).toFixed(1) : '?';\nconst swapPct   = s.swap?.total ? ((s.swap.used / s.swap.total) * 100).toFixed(1) : '0.0';\n\n// Disk\nconst diskLines = disk.map(d => {\n  const pct = (d.used_fraction * 100).toFixed(1);\n  const freeGB = (d.avail / 1073741824).toFixed(1);\n  const st = label(pct, 80, 90);\n  return { name: d.storage, pct, freeGB, st };\n});\nconst diskSummary = diskLines.map(d => `${d.name}: ${d.pct}% used, ${d.freeGB} GB free [${d.st}]`).join('; ');\n\nconst header =\n  `*Full Homelab Status*\\n`\n  + `*Temp:* CPU ${cpuTemp}°C [${cpuTempSt}] | GPU ${gpuTemp}°C | NVMe ${nvmeTemp}°C [${nvmeTempSt}]\\n`\n  + `*CPU:* ${cpuPct}% [${cpuSt}] | Load: ${load}\\n`\n  + `*RAM:* ${ramUsedGB}/${ramTotGB} GB (${ramPct}%) [${ramSt}] | Swap: ${swapPct}%\\n`\n  + `*Disk:* ${diskSummary}`;\n\n// Build a plain-English status list for the LLM — no threshold re-evaluation needed\nconst statusLines = [\n  `CPU temperature: ${cpuTemp}°C — status is ${cpuTempSt}`,\n  `GPU temperature: ${gpuTemp}°C`,\n  `NVMe temperature: ${nvmeTemp}°C — status is ${nvmeTempSt}`,\n  `CPU usage: ${cpuPct}% — status is ${cpuSt}`,\n  `Load averages: ${load}`,\n  `RAM: ${ramUsedGB}/${ramTotGB} GB (${ramPct}%) — status is ${ramSt}`,\n  `Swap: ${swapPct}%`,\n  ...diskLines.map(d => `Storage ${d.name}: ${d.pct}% used, ${d.freeGB} GB free — status is ${d.st}`),\n].join('\\n');\n\nconst warnOrCrit = [cpuTempSt, nvmeTempSt, cpuSt, ramSt, ...diskLines.map(d => d.st)]\n  .some(st => st === 'WARN' || st === 'CRIT');\n\nconst prompt =\n  `You are a concise homelab assistant. Write 2-3 short sentences summarising the overall health of a Proxmox server.\\n`\n  + `The statuses below have already been evaluated — do NOT re-evaluate or contradict them.\\n`\n  + `Use the status labels (OK / WARN / CRIT) exactly as given. Only mention concerns for items labelled WARN or CRIT.\\n`\n  + (warnOrCrit ? '' : `All metrics are OK — keep the summary positive and brief.\\n`)\n  + `No markdown, no bullet points.\\n\\n`\n  + statusLines;\n\nreturn [{ json: { header, prompt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [656, 560],
+      "id": "full-aggregate-4444-444444444444",
+      "name": "Aggregate Full Metrics",
+      "notes": "Reads all 3 fetch results and builds header + LLM prompt for the full report."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.100.250:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gemma2:2b', prompt: $json.prompt, stream: false }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [880, 560],
+      "id": "full-llm-gen-55555-555555555555",
+      "name": "LLM Generate Full Reply",
+      "notes": "Calls Ollama for a holistic 2-3 sentence health summary."
+    },
+    {
+      "parameters": {
+        "jsCode": "const header = $('Aggregate Full Metrics').first().json.header;\nconst sentence = ($input.first().json?.response || '').trim();\nconst text = `${header}\\n\\n_${sentence}_`;\nreturn [{ json: { text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1104, 560],
+      "id": "full-parse-llm-6666-666666666666",
+      "name": "Parse LLM Full Reply",
+      "notes": "Combines structured header with the LLM health summary."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "LLM Classify Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Classify Intent": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Intent": {
+      "main": [
+        [
+          {
+            "node": "Intent Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intent Router": {
+      "main": [
+        [
+          {
+            "node": "Fetch Temp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Status (CPU/RAM)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Status (CPU/RAM)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Disk",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Temp (Full)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Temp": {
+      "main": [
+        [
+          {
+            "node": "Format Temp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Status (CPU/RAM)": {
+      "main": [
+        [
+          {
+            "node": "Format CPU or RAM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Disk": {
+      "main": [
+        [
+          {
+            "node": "Format Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Temp": {
+      "main": [
+        [
+          {
+            "node": "LLM Generate Temp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format CPU or RAM": {
+      "main": [
+        [
+          {
+            "node": "LLM Generate CPU/RAM Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Disk": {
+      "main": [
+        [
+          {
+            "node": "LLM Generate Disk Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Generate Temp Reply": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Temp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Temp Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Generate CPU/RAM Reply": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM CPU/RAM Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM CPU/RAM Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Generate Disk Reply": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Disk Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Disk Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Temp (Full)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Status (Full)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Status (Full)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Disk (Full)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Disk (Full)": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Full Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Full Metrics": {
+      "main": [
+        [
+          {
+            "node": "LLM Generate Full Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Generate Full Reply": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Full Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Full Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "5e447c28-1b4e-4005-b9dd-52e920b01ac5",
+  "meta": {
+    "instanceId": "f64e3d63504ad1d7f005ba30acf82b7cd3a28576038a02bcc8099ca954616617"
+  },
+  "id": "7Eqc2ZuGiMj89IF4",
+  "tags": []
+}
