@@ -1,0 +1,47 @@
+---
+- name: Deploy node-exporter on all k8s nodes
+  hosts: k8s
+  become: yes
+  gather_facts: yes
+
+  vars:
+    node_exporter_port: 9100
+
+  tasks:
+    - name: Check if node-exporter container is running
+      shell: docker ps --filter "name=^node-exporter$" --format {% raw %}"{{.Names}}"{% endraw %}
+      register: node_exporter_running
+      changed_when: false
+      failed_when: false
+
+    - name: Deploy node-exporter container
+      shell: |
+        docker run -d \
+          --name node-exporter \
+          --restart=always \
+          --pid=host \
+          --network=host \
+          -v /proc:/host/proc:ro \
+          -v /sys:/host/sys:ro \
+          -v /:/host:ro,rslave \
+          prom/node-exporter:latest \
+          --path.procfs=/host/proc \
+          --path.sysfs=/host/sys \
+          --path.rootfs=/host \
+          --collector.filesystem.mount-points-exclude='^/(sys|proc|dev|host|etc)($$|/)'
+      when: node_exporter_running.stdout != "node-exporter"
+
+    - name: Wait for node-exporter to be ready
+      uri:
+        url: "http://localhost:{{ node_exporter_port }}/metrics"
+        status_code: 200
+      register: exporter_status
+      until: exporter_status.status == 200
+      retries: 6
+      delay: 5
+
+    - name: Display node-exporter status
+      debug:
+        msg:
+          - "node-exporter deployed on {{ inventory_hostname }}"
+          - "Metrics endpoint: http://{{ ansible_host }}:{{ node_exporter_port }}/metrics"

@@ -117,6 +117,7 @@ homelab-journey/
 │       │   ├── database-setup.yml
 │       │   ├── monitoring-setup.yml
 │       │   ├── monitoring-dashboards-setup.yml
+│       │   ├── node-exporter-setup.yml
 │       │   ├── n8n-setup.yml
 │       │   └── cicd-setup.yml
 │       └── networking/        # Network & remote access
@@ -292,10 +293,27 @@ This playbook will:
 This will install Prometheus, Grafana, and Loki on the monitoring VM and configure them to monitor your Kubernetes cluster and other services.
 
 ```bash
+# Deploy Prometheus + Grafana on the monitoring VM
 cd ansible
 ansible-playbook playbooks/services/monitoring-setup.yml
 ansible-playbook playbooks/services/monitoring-dashboards-setup.yml
 ```
+
+**Deploy node-exporter on k8s nodes** (required for k8s-nodes targets in Prometheus):
+```bash
+cd ansible
+ansible-playbook playbooks/services/node-exporter-setup.yml
+```
+
+**Prometheus scrape targets:**
+
+| Job | Endpoint | Notes |
+|---|---|---|
+| `prometheus` | `localhost:9090` | Self-monitoring |
+| `node-exporter-monitoring` | `node-exporter:9100` | Monitoring VM metrics |
+| `k8s-nodes` | `192.168.100.201-203:9100` | Requires `node-exporter-setup.yml` on k8s nodes |
+| `postgres` | `192.168.100.205:9187` | postgres-exporter sidecar on database VM |
+| `docker-registry` | `192.168.100.240:5001` | Registry debug/metrics port (not port 5000) |
 
 ## 8. Setup AI VM (Ollama + TinyLlama)
 
@@ -574,7 +592,7 @@ sudo iptables -L -n -v
 All playbooks are organized in `ansible/playbooks/` by functional category:
 - 🏗️ **[Infrastructure](ansible/playbooks/infrastructure/)** - Proxmox, Docker, Nginx, QEMU agent (4 playbooks)
 - ☸️ **[Kubernetes](ansible/playbooks/kubernetes/)** - K3s cluster deployment (1 playbook)
-- 🚀 **[Services](ansible/playbooks/services/)** - Databases, monitoring, n8n, CI/CD (5 playbooks)
+- 🚀 **[Services](ansible/playbooks/services/)** - Databases, monitoring, node-exporter, n8n, CI/CD (6 playbooks)
 - 🌐 **[Networking](ansible/playbooks/networking/)** - Cloudflare tunnel, GitHub runner (2 playbooks)
 
 

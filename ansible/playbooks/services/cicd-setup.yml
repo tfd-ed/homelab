@@ -14,6 +14,14 @@
     registry_data_dir: /var/lib/docker-registry
 
   tasks:
+    - name: Remove broken ookla speedtest-cli repository
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/ookla_speedtest-cli.list
+        - /etc/apt/sources.list.d/ookla_speedtest-cli.list.save
+
     - name: Update apt cache
       apt:
         update_cache: yes
@@ -163,10 +171,40 @@
         state: directory
         mode: "0755"
 
+    - name: Create Docker registry config directory
+      file:
+        path: /etc/docker-registry
+        state: directory
+        mode: "0755"
+
+    - name: Create Docker registry configuration with Prometheus metrics
+      copy:
+        dest: /etc/docker-registry/config.yml
+        content: |
+          version: 0.1
+          log:
+            level: info
+          storage:
+            filesystem:
+              rootdirectory: /var/lib/registry
+          http:
+            addr: :5000
+            debug:
+              addr: :5001
+              prometheus:
+                enabled: true
+                path: /metrics
+        mode: "0644"
+
     - name: Check if registry container is running
       shell: docker ps --filter "name=^registry$" --format {% raw %}"{{.Names}}"{% endraw %}
       register: registry_running
       changed_when: false
+
+    - name: Stop existing registry container (to apply new config)
+      shell: docker rm -f registry
+      when: registry_running.stdout == "registry"
+      ignore_errors: yes
 
     - name: Deploy Docker Registry container
       shell: |
@@ -174,9 +212,10 @@
           --name registry \
           --restart=always \
           -p {{ registry_port }}:5000 \
+          -p 5001:5001 \
           -v {{ registry_data_dir }}:/var/lib/registry \
+          -v /etc/docker-registry/config.yml:/etc/docker/registry/config.yml:ro \
           registry:2
-      when: registry_running.stdout != "registry"
 
     - name: Configure Docker to use insecure registry
       copy:

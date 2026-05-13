@@ -82,10 +82,10 @@
                   labels:
                     instance: 'database-vm'
 
-            # Docker Registry
+            # Docker Registry debug/metrics endpoint (port 5001)
             - job_name: 'docker-registry'
               static_configs:
-                - targets: ['192.168.100.240:5000']
+                - targets: ['192.168.100.240:5001']
                   labels:
                     instance: 'ci-cd-vm'
 
