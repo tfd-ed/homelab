@@ -1,0 +1,931 @@
+{
+  "name": "Backend Bootcamp — Registration (Standalone, No Backend)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🚀 STANDALONE N8N WORKFLOW — No Backend Required\n\n**This workflow handles EVERYTHING:**\n✅ Google OAuth authentication\n✅ Session token generation (JWT)\n✅ MongoDB registration storage\n✅ File upload to Google Drive\n✅ Telegram notifications\n✅ Duplicate prevention\n\n**Required:**\n- MongoDB connection\n- Google Drive (15 GB free)\n- Telegram bot token\n- Google OAuth credentials",
+        "height": 260,
+        "width": 420,
+        "color": 4
+      },
+      "id": "note-001",
+      "name": "📌 Note — Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-60, -620]
+    },
+    {
+      "parameters": {
+        "content": "## ⚙️ Required Environment Variables\n\n| Variable | Value |\n|---|---|\n| `GOOGLE_CLIENT_ID` | Your Google OAuth Client ID |\n| `GOOGLE_CLIENT_SECRET` | Your Google OAuth Client Secret |\n| `N8N_BASE_URL` | https://your-n8n.com |\n| `MONGODB_URI` | mongodb://... or mongodb+srv://... |\n| `MONGODB_DATABASE` | bootcamp |\n| `JWT_SECRET` | random-256-bit-secret |\n| `GDRIVE_FOLDER_ID` | Google Drive folder ID for uploads |\n| `TELEGRAM_BOT_TOKEN` | your-telegram-bot-token |\n| `TELEGRAM_ADMIN_CHAT_ID` | your-telegram-user-id |\n| `TELEGRAM_LIVE_GROUP` | https://t.me/+livelink |\n| `TELEGRAM_VIDEO_GROUP` | https://t.me/+videolink |\n| `PAYMENT_LIVE_URL` | Payment gateway link ($49.99) |\n| `PAYMENT_VIDEO_URL` | Payment gateway link ($29.99) |",
+        "height": 360,
+        "width": 480,
+        "color": 5
+      },
+      "id": "note-002",
+      "name": "📌 Note — Environment Variables",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [400, -620]
+    },
+    {
+      "parameters": {
+        "content": "## � Payment Gateway Setup\n\n**Get payment links from your provider:**\n\n**ABA PayWay:**\n- Create payment link for $49.99 (Live)\n- Create payment link for $29.99 (Video)\n\n**Wing/Pi Pay/True Money:**\n- Generate payment request link\n- Set amount and description\n\n**Stripe/PayPal:**\n- Create payment link in dashboard\n- Set fixed amounts\n\n**Add to environment variables:**\n- `PAYMENT_LIVE_URL` = link for $49.99\n- `PAYMENT_VIDEO_URL` = link for $29.99\n\n✅ Users click → Pay → Upload receipt",
+        "height": 340,
+        "width": 380,
+        "color": 6
+      },
+      "id": "note-003",
+      "name": "📌 Note — Payment Gateway",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [920, -620]
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "bootcamp/start",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-start",
+      "name": "Start — Landing Page",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, -380],
+      "webhookId": "start-landing"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Backend Development Bootcamp Registration</title>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body {\n      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;\n      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n      min-height: 100vh;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n      padding: 20px;\n    }\n    .container {\n      background: white;\n      border-radius: 16px;\n      box-shadow: 0 20px 60px rgba(0,0,0,0.3);\n      max-width: 480px;\n      width: 100%;\n      padding: 48px 40px;\n      text-align: center;\n    }\n    h1 { font-size: 28px; color: #1e293b; margin-bottom: 12px; }\n    .subtitle { color: #64748b; font-size: 15px; margin-bottom: 32px; line-height: 1.6; }\n    .tracks {\n      background: #f8fafc;\n      border: 1px solid #e2e8f0;\n      border-radius: 12px;\n      padding: 24px;\n      margin-bottom: 32px;\n      text-align: left;\n    }\n    .track-item {\n      display: flex;\n      align-items: center;\n      padding: 16px 0;\n      border-bottom: 1px solid #e2e8f0;\n    }\n    .track-item:last-child { border-bottom: none; }\n    .track-icon { font-size: 32px; margin-right: 16px; }\n    .track-info h3 { font-size: 14px; color: #1e293b; margin-bottom: 4px; }\n    .track-info p { font-size: 12px; color: #64748b; }\n    .price { font-size: 20px; font-weight: 700; color: #0ea5e9; margin-left: auto; }\n    .google-btn {\n      display: inline-flex;\n      align-items: center;\n      justify-content: center;\n      gap: 12px;\n      width: 100%;\n      padding: 16px 24px;\n      background: #fff;\n      border: 2px solid #e5e7eb;\n      border-radius: 10px;\n      font-size: 16px;\n      font-weight: 600;\n      color: #1f2937;\n      cursor: pointer;\n      transition: all 0.2s;\n      text-decoration: none;\n    }\n    .google-btn:hover {\n      background: #f9fafb;\n      border-color: #d1d5db;\n      transform: translateY(-2px);\n      box-shadow: 0 4px 12px rgba(0,0,0,0.1);\n    }\n    .note { margin-top: 24px; font-size: 13px; color: #64748b; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <h1>🎓 Backend Development Bootcamp</h1>\n    <p class=\"subtitle\">Master Express.js, MongoDB, and real-world backend development in a project-based learning environment</p>\n    \n    <div class=\"tracks\">\n      <div class=\"track-item\">\n        <div class=\"track-icon\">🎬</div>\n        <div class=\"track-info\">\n          <h3>Self-Paced Video Course</h3>\n          <p>Lifetime access · Learn anytime</p>\n        </div>\n        <div class=\"price\">$29.99</div>\n      </div>\n      <div class=\"track-item\">\n        <div class=\"track-icon\">🎓</div>\n        <div class=\"track-info\">\n          <h3>Live Online Class</h3>\n          <p>Starts July 15 · Tue & Thu 7-9 PM</p>\n        </div>\n        <div class=\"price\">$49.99</div>\n      </div>\n    </div>\n\n    <a href=\"{{ $env.N8N_BASE_URL }}/webhook/bootcamp/auth\" class=\"google-btn\">\n      <svg width=\"20\" height=\"20\" viewBox=\"0 0 48 48\"><path fill=\"#EA4335\" d=\"M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z\"/><path fill=\"#4285F4\" d=\"M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z\"/><path fill=\"#FBBC05\" d=\"M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z\"/><path fill=\"#34A853\" d=\"M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z\"/></svg>\n      Continue with Google\n    </a>\n\n    <p class=\"note\">🔒 We use Google sign-in to prevent duplicate registrations and protect your data</p>\n  </div>\n</body>\n</html>",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" }
+            ]
+          }
+        }
+      },
+      "id": "resp-landing",
+      "name": "→ Show Landing Page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [280, -380]
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "bootcamp/auth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-auth",
+      "name": "Google OAuth — Initiate",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, -180],
+      "webhookId": "auth-initiate"
+    },
+    {
+      "parameters": {
+        "respondWith": "redirect",
+        "redirectURL": "=https://accounts.google.com/o/oauth2/v2/auth?client_id={{ $env.GOOGLE_CLIENT_ID }}&redirect_uri={{ encodeURIComponent($env.N8N_BASE_URL + '/webhook/bootcamp/auth/callback') }}&response_type=code&scope=openid%20email%20profile&access_type=offline&prompt=select_account&state={{ Date.now() }}",
+        "options": {}
+      },
+      "id": "resp-google",
+      "name": "→ Redirect to Google",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [280, -180]
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "bootcamp/auth/callback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-callback",
+      "name": "Google OAuth — Callback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 20],
+      "webhookId": "auth-callback"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "code", "value": "={{ $json.query.code }}" },
+            { "name": "client_id", "value": "={{ $env.GOOGLE_CLIENT_ID }}" },
+            {
+              "name": "client_secret",
+              "value": "={{ $env.GOOGLE_CLIENT_SECRET }}"
+            },
+            {
+              "name": "redirect_uri",
+              "value": "={{ $env.N8N_BASE_URL }}/webhook/bootcamp/auth/callback"
+            },
+            { "name": "grant_type", "value": "authorization_code" }
+          ]
+        }
+      },
+      "id": "http-token",
+      "name": "Exchange Code for Token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 20]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/oauth2/v2/userinfo",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.access_token }}"
+            }
+          ]
+        }
+      },
+      "id": "http-profile",
+      "name": "Get Google Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 20]
+    },
+    {
+      "parameters": {
+        "operation": "findOneAndUpdate",
+        "collection": "users",
+        "filterJson": "={{ { googleId: $json.id } }}",
+        "updateJson": "={{ {\n  $set: {\n    email: $json.email,\n    name: $json.name,\n    picture: $json.picture,\n    lastLogin: new Date()\n  },\n  $setOnInsert: {\n    googleId: $json.id,\n    createdAt: new Date()\n  }\n} }}",
+        "options": {
+          "upsert": true,
+          "returnNewDocument": true
+        }
+      },
+      "id": "mongo-user",
+      "name": "MongoDB — Save User",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [840, 20],
+      "credentials": {
+        "mongoDb": {
+          "id": "REPLACE_WITH_YOUR_MONGO_CREDENTIAL_ID",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "findOne",
+        "collection": "registrations",
+        "query": "={{ { userId: $json._id } }}"
+      },
+      "id": "mongo-check-reg",
+      "name": "MongoDB — Check Registration",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [1120, 20],
+      "credentials": {
+        "mongoDb": {
+          "id": "REPLACE_WITH_YOUR_MONGO_CREDENTIAL_ID",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "already-reg-check",
+              "leftValue": "={{ $json._id }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "isEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-new-user",
+      "name": "IF — First Time User?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1400, 20]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst userId = $('MongoDB — Save User').item.json._id.toString();\nconst email = $('Get Google Profile').item.json.email;\nconst secret = $env.JWT_SECRET;\n\n// Simple JWT (Header.Payload.Signature)\nconst header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');\nconst payload = Buffer.from(JSON.stringify({\n  userId,\n  email,\n  iat: Math.floor(Date.now() / 1000),\n  exp: Math.floor(Date.now() / 1000) + 3600 // 1 hour\n})).toString('base64url');\n\nconst signature = crypto\n  .createHmac('sha256', secret)\n  .update(`${header}.${payload}`)\n  .digest('base64url');\n\nconst token = `${header}.${payload}.${signature}`;\n\nreturn { token, userId, email };"
+      },
+      "id": "code-jwt",
+      "name": "Generate JWT Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, -100]
+    },
+    {
+      "parameters": {
+        "respondWith": "redirect",
+        "redirectURL": "={{ $env.N8N_BASE_URL }}/form/bootcamp-register?token={{ $json.token }}",
+        "options": {}
+      },
+      "id": "resp-form-redirect",
+      "name": "→ Redirect to Form",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1960, -100]
+    },
+    {
+      "parameters": {
+        "respondWith": "redirect",
+        "redirectURL": "={{ $env.N8N_BASE_URL }}/webhook/bootcamp/already-registered",
+        "options": {}
+      },
+      "id": "resp-already-reg",
+      "name": "→ Already Registered Page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1680, 220]
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "bootcamp/already-registered",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-already-reg",
+      "name": "Already Registered — Page",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 420],
+      "webhookId": "already-registered"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"UTF-8\">\n  <title>Already Registered</title>\n  <style>\n    body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #f1f5f9; margin: 0; }\n    .box { background: white; padding: 48px; border-radius: 12px; text-align: center; max-width: 420px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }\n    h1 { font-size: 48px; margin: 0 0 16px; }\n    h2 { color: #dc2626; margin: 0 0 12px; }\n    p { color: #64748b; line-height: 1.6; }\n    a { display: inline-block; margin-top: 24px; padding: 12px 28px; background: #0ea5e9; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; }\n  </style>\n</head>\n<body>\n  <div class=\"box\">\n    <h1>✅</h1>\n    <h2>You're Already Registered!</h2>\n    <p>Your registration is on file. Check your email or Telegram for payment verification status.</p>\n    <a href=\"{{ $env.N8N_BASE_URL }}/webhook/bootcamp/start\">← Back to Home</a>\n  </div>\n</body>\n</html>",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" }
+            ]
+          }
+        }
+      },
+      "id": "resp-already-reg-page",
+      "name": "→ Show Already Registered",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [280, 420]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "🎓 Backend Development Bootcamp",
+        "formDescription": "<p style='margin:0 0 20px;color:#64748b;font-size:14px'>Complete your registration in 5 simple steps</p>",
+        "path": "bootcamp-register",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Session Token (from Google sign-in)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "Paste your JWT token here" }
+            },
+            {
+              "fieldLabel": "Select Your Learning Track",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "🎬 Self-Paced Video Course — $29.99" },
+                  { "option": "🎓 Live Online Class — $49.99" }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 1/5 — Choose Track",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "form-page1",
+      "name": "Form — Page 1: Track Selection",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [0, 720],
+      "webhookId": "form-page-1"
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst token = $input.item.json['Session Token (from Google sign-in)'];\nconst secret = $env.JWT_SECRET;\n\ntry {\n  const [header, payload, signature] = token.split('.');\n  \n  // Verify signature\n  const expectedSig = crypto\n    .createHmac('sha256', secret)\n    .update(`${header}.${payload}`)\n    .digest('base64url');\n  \n  if (signature !== expectedSig) {\n    return { valid: false, error: 'Invalid signature' };\n  }\n  \n  // Decode payload\n  const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());\n  \n  // Check expiry\n  if (decoded.exp < Math.floor(Date.now() / 1000)) {\n    return { valid: false, error: 'Token expired' };\n  }\n  \n  return { valid: true, userId: decoded.userId, email: decoded.email };\n} catch (e) {\n  return { valid: false, error: 'Malformed token' };\n}"
+      },
+      "id": "code-verify-jwt",
+      "name": "Verify JWT Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 720]
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "token-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-token-valid",
+      "name": "IF — Token Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [560, 720]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "❌ Invalid Session",
+        "formDescription": "<div style='text-align:center;padding:40px 20px'><h2 style='color:#dc2626'>Your session is invalid or expired</h2><p style='color:#64748b;margin:20px 0'>Please sign in again to get a fresh token.</p><a href='/webhook/bootcamp/start' style='display:inline-block;padding:12px 28px;background:#0ea5e9;color:white;text-decoration:none;border-radius:8px;font-weight:600'>← Sign In Again</a></div>",
+        "formFields": { "values": [] },
+        "options": { "buttonLabel": "← Back" }
+      },
+      "id": "form-error-token",
+      "name": "Form — Token Error",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [840, 920]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Personal Information",
+        "formDescription": "<p style='color:#64748b;font-size:14px'>Enter your full name in both English and Khmer</p>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "First Name (English)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "e.g. Dara" }
+            },
+            {
+              "fieldLabel": "Last Name (English)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "e.g. Chan" }
+            },
+            {
+              "fieldLabel": "ឈ្មោះ (First Name - Khmer)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "ឧ. ដារ៉ា" }
+            },
+            {
+              "fieldLabel": "នាមត្រកូល (Last Name - Khmer)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "ឧ. ចាន់" }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 2/5 — Personal Info",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "form-page2",
+      "name": "Form — Page 2: Names",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [840, 600]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Academic Background",
+        "formDescription": "<p style='color:#64748b;font-size:14px'>Tell us about your education</p>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Current Academic Year",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "High School (Grade 9-12)" },
+                  { "option": "University — Year 1" },
+                  { "option": "University — Year 2" },
+                  { "option": "University — Year 3" },
+                  { "option": "University — Year 4" },
+                  { "option": "University — Year 5+" },
+                  { "option": "Graduate Student" },
+                  { "option": "Working Professional" },
+                  { "option": "Career Changer" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Major / Field of Study",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "e.g. Computer Science" }
+            },
+            {
+              "fieldLabel": "Institution / University (optional)",
+              "fieldType": "text",
+              "requiredField": false,
+              "fieldOptions": { "placeholder": "e.g. RUPP, ITC, Norton" }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 3/5 — Academic Background",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "form-page3",
+      "name": "Form — Page 3: Background",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1120, 600]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Profile & Expectations",
+        "formDescription": "<p style='color:#64748b;font-size:14px'>Help us understand your goals</p>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "GitHub Username",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "your-username (no @ symbol)" }
+            },
+            {
+              "fieldLabel": "Programming Experience Level",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "🆕 No experience — Starting from zero" },
+                  { "option": "🌱 Basic — Know HTML/CSS or Python basics" },
+                  { "option": "🔨 Intermediate — Built small projects" },
+                  { "option": "⚡ Advanced — Professional experience" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "What are your expectations from this bootcamp?",
+              "fieldType": "textarea",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "I want to learn..." }
+            },
+            {
+              "fieldLabel": "How did you hear about this bootcamp?",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "Facebook" },
+                  { "option": "Telegram" },
+                  { "option": "Friend / Referral" },
+                  { "option": "YouTube" },
+                  { "option": "Google Search" },
+                  { "option": "Instagram" },
+                  { "option": "Other" }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 4/5 — Profile",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "form-page4",
+      "name": "Form — Page 4: Profile",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1400, 600]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "course-type",
+              "name": "courseType",
+              "value": "={{ $('Form — Page 1: Track Selection').item.json['Select Your Learning Track'].includes('Live') ? 'live' : 'video' }}",
+              "type": "string"
+            },
+            {
+              "id": "price",
+              "name": "price",
+              "value": "={{ $('Form — Page 1: Track Selection').item.json['Select Your Learning Track'].includes('Live') ? 49.99 : 29.99 }}",
+              "type": "number"
+            },
+            {
+              "id": "payment-url",
+              "name": "paymentUrl",
+              "value": "={{ $('Form — Page 1: Track Selection').item.json['Select Your Learning Track'].includes('Live') ? $env.PAYMENT_LIVE_URL : $env.PAYMENT_VIDEO_URL }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "set-payment-data",
+      "name": "Set — Payment Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1680, 600]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Payment",
+        "formDescription": "={{ '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:18px 20px;margin-bottom:20px\"><strong style=\"color:#166534\">✅ Almost done!</strong><br/><span style=\"color:#15803d;font-size:13px\">Complete payment to secure your seat</span></div><div style=\"background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;text-align:center;margin-bottom:20px\"><p style=\"margin:0 0 8px;font-size:32px;font-weight:800;color:#0ea5e9\">$' + $json.price + '</p><p style=\"color:#94a3b8;font-size:12px\">One-time payment · No recurring charges</p></div><div style=\"text-align:center;margin-bottom:24px\"><p style=\"color:#475569;font-weight:600;font-size:14px;margin:0 0 16px\">💳 Click the button below to pay securely:</p><a href=\"' + $json.paymentUrl + '\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"display:inline-block;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:#fff;padding:16px 48px;border-radius:12px;font-weight:700;font-size:16px;text-decoration:none;box-shadow:0 4px 14px rgba(102,126,234,0.4);transition:transform 0.2s,box-shadow 0.2s\" onmouseover=\"this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 6px 20px rgba(102,126,234,0.5)\'\" onmouseout=\"this.style.transform=\'translateY(0)\';this.style.boxShadow=\'0 4px 14px rgba(102,126,234,0.4)\'\">🔒 Pay $' + $json.price + ' Now</a><p style=\"color:#94a3b8;font-size:12px;margin:14px 0 0\">Secure payment via ABA · Wing · Pi Pay · True Money</p></div><div style=\"background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:14px 16px;margin-bottom:20px\"><p style=\"color:#92400e;font-size:13px;margin:0\">⚠️ <strong>Important:</strong> After completing payment, return here to upload your receipt screenshot.</p></div><p style=\"color:#64748b;font-size:13px;margin:0\">⬇️ Upload your <strong>payment screenshot</strong> below:</p>' }}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Payment Screenshot",
+              "fieldType": "file",
+              "requiredField": true,
+              "acceptFileTypes": ".jpg,.jpeg,.png,.pdf",
+              "multipleFiles": false
+            },
+            {
+              "fieldLabel": "Transaction ID (optional)",
+              "fieldType": "text",
+              "requiredField": false,
+              "fieldOptions": { "placeholder": "e.g. TXN-2026XXXX" }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 5/5 — Payment",
+          "buttonLabel": "Submit Registration 🎉"
+        }
+      },
+      "id": "form-page5",
+      "name": "Form — Page 5: Payment",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1960, 600]
+    },
+
+    {
+      "parameters": {
+        "operation": "upload",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GDRIVE_FOLDER_ID }}"
+        },
+        "name": "=payment_{{ $('Verify JWT Token').item.json.userId }}_{{ Date.now() }}.{{ $binary.data.fileExtension }}",
+        "options": {
+          "googleFileConvert": false
+        }
+      },
+      "id": "gdrive-upload",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2240, 600],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_GDRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "operation": "insertOne",
+        "collection": "registrations",
+        "documentJson": "={{ {\n  userId: $('Verify JWT Token').item.json.userId,\n  email: $('Verify JWT Token').item.json.email,\n  courseType: $('Set — Payment Data').item.json.courseType,\n  price: $('Set — Payment Data').item.json.price,\n  \n  firstNameEn: $('Form — Page 2: Names').item.json['First Name (English)'],\n  lastNameEn: $('Form — Page 2: Names').item.json['Last Name (English)'],\n  firstNameKh: $('Form — Page 2: Names').item.json['ឈ្មោះ (First Name - Khmer)'],\n  lastNameKh: $('Form — Page 2: Names').item.json['នាមត្រកូល (Last Name - Khmer)'],\n  \n  academicYear: $('Form — Page 3: Background').item.json['Current Academic Year'],\n  major: $('Form — Page 3: Background').item.json['Major / Field of Study'],\n  institution: $('Form — Page 3: Background').item.json['Institution / University (optional)'] || '',\n  \n  githubUsername: $('Form — Page 4: Profile').item.json['GitHub Username'],\n  experienceLevel: $('Form — Page 4: Profile').item.json['Programming Experience Level'],\n  expectations: $('Form — Page 4: Profile').item.json['What are your expectations from this bootcamp?'],\n  referralSource: $('Form — Page 4: Profile').item.json['How did you hear about this bootcamp?'],\n  \n  transactionId: $('Form — Page 5: Payment').item.json['Transaction ID (optional)'] || '',\n  paymentScreenshotUrl: $json.webViewLink,\n  paymentScreenshotFileId: $json.id,\n  \n  paymentStatus: 'pending',\n  submittedAt: new Date(),\n  verifiedAt: null,\n  telegramNotificationSent: false\n} }}"
+      },
+      "id": "mongo-save-reg",
+      "name": "MongoDB — Save Registration",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [2520, 600],
+      "credentials": {
+        "mongoDb": {
+          "id": "REPLACE_WITH_YOUR_MONGO_CREDENTIAL_ID",
+          "name": "MongoDB account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_CHAT_ID }}",
+        "text": "=💰 *New Bootcamp Registration*\n━━━━━━━━━━━━━━━━━━━\n👤 *Name:* {{ $('Form — Page 2: Names').item.json['First Name (English)'] }} {{ $('Form — Page 2: Names').item.json['Last Name (English)'] }}\n📧 *Email:* {{ $('Verify JWT Token').item.json.email }}\n📚 *Track:* {{ $('Set — Payment Data').item.json.courseType === 'live' ? 'Live Class ($49.99)' : 'Video Course ($29.99)' }}\n\n🎓 *Background:*\n• {{ $('Form — Page 3: Background').item.json['Current Academic Year'] }}\n• {{ $('Form — Page 3: Background').item.json['Major / Field of Study'] }}\n• GitHub: @{{ $('Form — Page 4: Profile').item.json['GitHub Username'] }}\n\n📎 *Payment Screenshot:*\n{{ $('Upload to Google Drive').item.json.webViewLink }}\n\n💳 *Transaction ID:* {{ $('Form — Page 5: Payment').item.json['Transaction ID (optional)'] || 'N/A' }}\n\n⏰ *Submitted:* {{ new Date().toLocaleString('en-US', { timeZone: 'Asia/Phnom_Penh' }) }}\n\n🔗 *Registration ID:* `{{ $('MongoDB — Save Registration').item.json.insertedId }}`",
+        "additionalFields": {
+          "parseMode": "Markdown"
+        }
+      },
+      "id": "telegram-admin",
+      "name": "Telegram — Notify Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2800, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "course-type-check",
+              "leftValue": "={{ $('Set — Payment Data').item.json.courseType }}",
+              "rightValue": "live",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-live-class",
+      "name": "IF — Live Class?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3080, 600]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "telegram-link",
+              "name": "telegramGroupLink",
+              "value": "={{ $env.TELEGRAM_LIVE_GROUP }}",
+              "type": "string"
+            },
+            {
+              "id": "start-date",
+              "name": "classStartDate",
+              "value": "July 15, 2026",
+              "type": "string"
+            },
+            {
+              "id": "schedule",
+              "name": "schedule",
+              "value": "Every Tuesday & Thursday · 7:00-9:00 PM (GMT+7)",
+              "type": "string"
+            },
+            {
+              "id": "track-label",
+              "name": "trackLabel",
+              "value": "🎓 Live Online Class",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "set-live-data",
+      "name": "Set — Live Class Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [3360, 480]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "telegram-link",
+              "name": "telegramGroupLink",
+              "value": "={{ $env.TELEGRAM_VIDEO_GROUP }}",
+              "type": "string"
+            },
+            {
+              "id": "start-date",
+              "name": "classStartDate",
+              "value": "Immediate — start learning today!",
+              "type": "string"
+            },
+            {
+              "id": "schedule",
+              "name": "schedule",
+              "value": "Self-paced · Lifetime access",
+              "type": "string"
+            },
+            {
+              "id": "track-label",
+              "name": "trackLabel",
+              "value": "🎬 Self-Paced Video Course",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "set-video-data",
+      "name": "Set — Video Course Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [3360, 720]
+    },
+
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "input1"
+      },
+      "id": "merge-course-info",
+      "name": "Merge — Course Info",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [3640, 600]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "🎉 Registration Complete!",
+        "formDescription": "={{ '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:24px;text-align:center;margin-bottom:20px\"><div style=\"font-size:56px;margin-bottom:10px\">🎉</div><h2 style=\"color:#166534;margin:0 0 8px\">Thank You, ' + $('Form — Page 2: Names').item.json['First Name (English)'] + '!</h2><p style=\"color:#15803d;margin:0;font-size:14px\">Your registration is received. We'll verify your payment within 24 hours.</p></div><div style=\"background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;margin-bottom:16px\"><h3 style=\"color:#1e293b;margin:0 0 14px;font-size:15px\">📋 Summary</h3><table style=\"width:100%;font-size:14px\"><tr style=\"border-bottom:1px solid #f1f5f9\"><td style=\"padding:9px 0;color:#64748b\">Track</td><td style=\"padding:9px 0;font-weight:600;color:#1e293b\">' + $json.trackLabel + '</td></tr><tr style=\"border-bottom:1px solid #f1f5f9\"><td style=\"padding:9px 0;color:#64748b\">Start Date</td><td style=\"padding:9px 0;font-weight:600;color:#166534\">' + $json.classStartDate + '</td></tr><tr><td style=\"padding:9px 0;color:#64748b\">Schedule</td><td style=\"padding:9px 0;color:#1e293b\">' + $json.schedule + '</td></tr></table></div><div style=\"background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:20px\"><h3 style=\"color:#1e40af;margin:0 0 10px;font-size:15px\">📱 Join Telegram Community</h3><p style=\"color:#3b5a9a;margin:0 0 14px;font-size:13px\">Request to join after payment verification:</p><a href=\"' + $json.telegramGroupLink + '\" target=\"_blank\" style=\"display:inline-block;padding:12px 28px;background:#0088cc;color:#fff;border-radius:8px;text-decoration:none;font-weight:700\">Join Group →</a></div>' }}",
+        "formFields": { "values": [] },
+        "options": {
+          "formTitle": "Registration Complete ✓",
+          "buttonLabel": "Done ✓"
+        }
+      },
+      "id": "form-success",
+      "name": "Form — Success Page",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [3920, 600]
+    }
+  ],
+
+  "connections": {
+    "Start — Landing Page": {
+      "main": [[{ "node": "→ Show Landing Page", "type": "main", "index": 0 }]]
+    },
+    "Google OAuth — Initiate": {
+      "main": [[{ "node": "→ Redirect to Google", "type": "main", "index": 0 }]]
+    },
+    "Google OAuth — Callback": {
+      "main": [
+        [{ "node": "Exchange Code for Token", "type": "main", "index": 0 }]
+      ]
+    },
+    "Exchange Code for Token": {
+      "main": [[{ "node": "Get Google Profile", "type": "main", "index": 0 }]]
+    },
+    "Get Google Profile": {
+      "main": [[{ "node": "MongoDB — Save User", "type": "main", "index": 0 }]]
+    },
+    "MongoDB — Save User": {
+      "main": [
+        [{ "node": "MongoDB — Check Registration", "type": "main", "index": 0 }]
+      ]
+    },
+    "MongoDB — Check Registration": {
+      "main": [
+        [{ "node": "IF — First Time User?", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF — First Time User?": {
+      "main": [
+        [{ "node": "Generate JWT Token", "type": "main", "index": 0 }],
+        [{ "node": "→ Already Registered Page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate JWT Token": {
+      "main": [[{ "node": "→ Redirect to Form", "type": "main", "index": 0 }]]
+    },
+    "Already Registered — Page": {
+      "main": [
+        [{ "node": "→ Show Already Registered", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 1: Track Selection": {
+      "main": [[{ "node": "Verify JWT Token", "type": "main", "index": 0 }]]
+    },
+    "Verify JWT Token": {
+      "main": [[{ "node": "IF — Token Valid?", "type": "main", "index": 0 }]]
+    },
+    "IF — Token Valid?": {
+      "main": [
+        [{ "node": "Form — Page 2: Names", "type": "main", "index": 0 }],
+        [{ "node": "Form — Token Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 2: Names": {
+      "main": [
+        [{ "node": "Form — Page 3: Background", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 3: Background": {
+      "main": [
+        [{ "node": "Form — Page 4: Profile", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 4: Profile": {
+      "main": [[{ "node": "Set — Payment Data", "type": "main", "index": 0 }]]
+    },
+    "Set — Payment Data": {
+      "main": [
+        [{ "node": "Form — Page 5: Payment", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 5: Payment": {
+      "main": [
+        [{ "node": "Upload to Google Drive", "type": "main", "index": 0 }]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [{ "node": "MongoDB — Save Registration", "type": "main", "index": 0 }]
+      ]
+    },
+    "MongoDB — Save Registration": {
+      "main": [
+        [{ "node": "Telegram — Notify Admin", "type": "main", "index": 0 }]
+      ]
+    },
+    "Telegram — Notify Admin": {
+      "main": [[{ "node": "IF — Live Class?", "type": "main", "index": 0 }]]
+    },
+    "IF — Live Class?": {
+      "main": [
+        [{ "node": "Set — Live Class Info", "type": "main", "index": 0 }],
+        [{ "node": "Set — Video Course Info", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set — Live Class Info": {
+      "main": [[{ "node": "Merge — Course Info", "type": "main", "index": 0 }]]
+    },
+    "Set — Video Course Info": {
+      "main": [[{ "node": "Merge — Course Info", "type": "main", "index": 1 }]]
+    },
+    "Merge — Course Info": {
+      "main": [[{ "node": "Form — Success Page", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "REPLACE_WITH_YOUR_N8N_INSTANCE_ID"
+  },
+  "id": "standalone-bootcamp-registration",
+  "tags": [
+    { "id": "tag-01", "name": "bootcamp" },
+    { "id": "tag-02", "name": "standalone" },
+    { "id": "tag-03", "name": "no-backend" }
+  ]
+}

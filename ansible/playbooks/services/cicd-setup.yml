@@ -309,6 +309,55 @@
         group: runner
         mode: "0755"
 
+    - name: Create Docker image cleanup script
+      copy:
+        dest: /usr/local/bin/docker-cleanup
+        content: |
+          #!/bin/bash
+          # Docker cleanup script for CI/CD VM
+          # - Runs garbage collection on the local Docker registry (primary cleanup target,
+          #   since images are built externally via GitHub Actions and pushed here)
+          # - Also prunes the host Docker daemon cache (builder cache, dangling images, etc.)
+          set -euo pipefail
+          LOG_PREFIX="[$(date '+%Y-%m-%d %H:%M:%S')]"
+
+          echo "$LOG_PREFIX === Docker cleanup started ==="
+
+          # --- 1. Registry garbage collection ---
+          # Removes unreferenced blobs from /var/lib/docker-registry.
+          # --delete-untagged also removes blobs for images with no tags.
+          if docker ps --filter "name=^registry$" --format "{% raw %}{{.Names}}{% endraw %}" | grep -q "^registry$"; then
+            echo "$LOG_PREFIX Running registry garbage collection..."
+            docker exec registry /bin/registry garbage-collect \
+              --delete-untagged \
+              /etc/docker/registry/config.yml
+            echo "$LOG_PREFIX Registry garbage collection complete."
+          else
+            echo "$LOG_PREFIX WARNING: registry container not running, skipping GC."
+          fi
+
+          # --- 2. Host Docker daemon cleanup ---
+          # Removes dangling images, unused build cache, and stopped containers
+          # left from any local builds or test runs on this host.
+          echo "$LOG_PREFIX Pruning host Docker daemon..."
+          docker image prune -af --filter "until=168h"
+          docker builder prune -af --filter "until=168h"
+          docker container prune -f
+          docker network prune -f
+
+          echo "$LOG_PREFIX === Docker cleanup complete ==="
+        mode: "0755"
+
+    - name: Schedule weekly Docker registry garbage collection via cron
+      cron:
+        name: "Docker registry GC and image cleanup"
+        user: root
+        weekday: "0"
+        hour: "3"
+        minute: "0"
+        job: "/usr/local/bin/docker-cleanup >> /var/log/docker-cleanup.log 2>&1"
+        state: present
+
     - name: Display setup completion
       debug:
         msg:

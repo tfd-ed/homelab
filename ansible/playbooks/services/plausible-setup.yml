@@ -1,0 +1,533 @@
+---
+# ============================================================
+# Plausible Analytics Setup
+# ============================================================
+# Play 1: Create PostgreSQL database on database-vm
+# Play 2: Deploy ClickHouse + Plausible to K3s cluster
+#
+# Required env vars before running:
+#   POSTGRES_PASSWORD       - existing postgres superuser password
+#   PLAUSIBLE_DB_PASSWORD   - password for the plausible postgres user
+#   PLAUSIBLE_SECRET_KEY    - 64-char random hex (openssl rand -hex 64)
+#
+# Usage:
+#   POSTGRES_PASSWORD=xxx PLAUSIBLE_DB_PASSWORD=yyy PLAUSIBLE_SECRET_KEY=zzz \
+#     ansible-playbook playbooks/services/plausible-setup.yml
+# ============================================================
+
+# ----------------------------------------------------------
+# Play 1: Provision PostgreSQL database on database-vm
+# ----------------------------------------------------------
+- name: Setup Plausible PostgreSQL database on database-vm
+  hosts: database
+  remote_user: ubuntu
+  become: yes
+
+  vars:
+    plausible_db_name: plausible_db
+    plausible_db_user: plausible
+    plausible_db_password: "{{ lookup('ansible.builtin.env', 'PLAUSIBLE_DB_PASSWORD') | default('changeme_plausible', true) }}"
+    postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') | default('changeme_postgres', true) }}"
+
+  tasks:
+    - name: Check if PostgreSQL container is running
+      command: docker inspect -f "{{ '{{' }}.State.Running{{ '}}' }}" postgres
+      register: postgres_container_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Fail if PostgreSQL container is not running
+      fail:
+        msg: "PostgreSQL container is not running. Run database-setup.yml first!"
+      when: postgres_container_check.rc != 0 or postgres_container_check.stdout | trim != "true"
+
+    - name: Install python3-psycopg2 for PostgreSQL modules
+      apt:
+        name: python3-psycopg2
+        state: present
+        update_cache: yes
+
+    - name: Create Plausible database
+      community.postgresql.postgresql_db:
+        name: "{{ plausible_db_name }}"
+        encoding: UTF8
+        lc_collate: en_US.UTF-8
+        lc_ctype: en_US.UTF-8
+        template: template0
+        state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
+
+    - name: Create Plausible database user
+      community.postgresql.postgresql_user:
+        name: "{{ plausible_db_user }}"
+        password: "{{ plausible_db_password }}"
+        state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
+
+    - name: Grant all privileges on Plausible database to plausible user
+      community.postgresql.postgresql_privs:
+        database: "{{ plausible_db_name }}"
+        privs: ALL
+        type: database
+        role: "{{ plausible_db_user }}"
+        state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
+
+    - name: Grant USAGE and CREATE on public schema to plausible user
+      community.postgresql.postgresql_privs:
+        database: "{{ plausible_db_name }}"
+        privs: USAGE,CREATE
+        type: schema
+        objs: public
+        role: "{{ plausible_db_user }}"
+        state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
+
+    - name: Display database setup result
+      debug:
+        msg:
+          - "PostgreSQL database '{{ plausible_db_name }}' created."
+          - "User '{{ plausible_db_user }}' created with full access."
+
+# ----------------------------------------------------------
+# Play 2: Deploy ClickHouse + Plausible to K3s cluster
+# ----------------------------------------------------------
+- name: Deploy Plausible Analytics to K3s cluster
+  hosts: k8s-master
+  become: yes
+  gather_facts: yes
+
+  vars:
+    plausible_version: "v2.1.4"
+    clickhouse_version: "24.3-alpine"
+    plausible_namespace: plausible
+    kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+
+    # External access - routed through the shared ingress controller on 30389
+    plausible_base_url: "https://plausible.tfdevs.com"
+    plausible_domain: "plausible.tfdevs.com"
+
+    # Secrets sourced from environment
+    plausible_db_password: "{{ lookup('ansible.builtin.env', 'PLAUSIBLE_DB_PASSWORD') | default('changeme_plausible', true) }}"
+    plausible_secret_key: "{{ lookup('ansible.builtin.env', 'PLAUSIBLE_SECRET_KEY') | default('CHANGE_ME_generate_with_openssl_rand_hex_64', true) }}"
+
+    # database-vm IP
+    db_host: "192.168.100.205"
+
+  tasks:
+    - name: Wait for K3s to be ready
+      wait_for:
+        path: "{{ kubeconfig_path }}"
+        state: present
+        timeout: 60
+
+    - name: Create Plausible namespace
+      shell: kubectl create namespace {{ plausible_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Create ClickHouse config directory
+      file:
+        path: /tmp/plausible-manifests
+        state: directory
+        mode: "0755"
+
+    # --- ClickHouse resources ---
+
+    - name: Create ClickHouse ConfigMap
+      copy:
+        dest: /tmp/plausible-manifests/clickhouse-config.yml
+        content: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: clickhouse-config
+            namespace: {{ plausible_namespace }}
+          data:
+            config.xml: |
+              <clickhouse>
+                <logger>
+                  <level>warning</level>
+                  <console>true</console>
+                </logger>
+                <query_log>
+                  <database>system</database>
+                  <table>query_log</table>
+                  <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+                </query_log>
+                <listen_host>0.0.0.0</listen_host>
+                <http_port>8123</http_port>
+                <tcp_port>9000</tcp_port>
+                <max_connections>4096</max_connections>
+                <keep_alive_timeout>3</keep_alive_timeout>
+                <max_concurrent_queries>100</max_concurrent_queries>
+                <uncompressed_cache_size>8589934592</uncompressed_cache_size>
+                <mark_cache_size>5368709120</mark_cache_size>
+              </clickhouse>
+            users.xml: |
+              <clickhouse>
+                <users>
+                  <default>
+                    <password></password>
+                    <networks>
+                      <ip>::/0</ip>
+                    </networks>
+                    <profile>default</profile>
+                    <quota>default</quota>
+                    <access_management>1</access_management>
+                  </default>
+                </users>
+                <profiles>
+                  <default>
+                    <max_memory_usage>1000000000</max_memory_usage>
+                    <use_uncompressed_cache>0</use_uncompressed_cache>
+                    <load_balancing>random</load_balancing>
+                  </default>
+                </profiles>
+                <quotas>
+                  <default>
+                    <interval>
+                      <duration>3600</duration>
+                      <queries>0</queries>
+                      <errors>0</errors>
+                      <result_rows>0</result_rows>
+                      <read_rows>0</read_rows>
+                      <execution_time>0</execution_time>
+                    </interval>
+                  </default>
+                </quotas>
+              </clickhouse>
+        mode: "0644"
+
+    - name: Create ClickHouse StatefulSet and Service
+      copy:
+        dest: /tmp/plausible-manifests/clickhouse.yml
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: clickhouse
+            namespace: {{ plausible_namespace }}
+          spec:
+            clusterIP: None
+            selector:
+              app: clickhouse
+            ports:
+              - name: http
+                port: 8123
+                targetPort: 8123
+              - name: native
+                port: 9000
+                targetPort: 9000
+          ---
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: clickhouse
+            namespace: {{ plausible_namespace }}
+          spec:
+            serviceName: clickhouse
+            replicas: 1
+            selector:
+              matchLabels:
+                app: clickhouse
+            template:
+              metadata:
+                labels:
+                  app: clickhouse
+              spec:
+                securityContext:
+                  fsGroup: 101
+                containers:
+                  - name: clickhouse
+                    image: clickhouse/clickhouse-server:{{ clickhouse_version }}
+                    ports:
+                      - containerPort: 8123
+                        name: http
+                      - containerPort: 9000
+                        name: native
+                    resources:
+                      requests:
+                        memory: "512Mi"
+                        cpu: "250m"
+                      limits:
+                        memory: "2Gi"
+                        cpu: "1000m"
+                    volumeMounts:
+                      - name: clickhouse-data
+                        mountPath: /var/lib/clickhouse
+                      - name: clickhouse-config
+                        mountPath: /etc/clickhouse-server/config.d/config.xml
+                        subPath: config.xml
+                      - name: clickhouse-config
+                        mountPath: /etc/clickhouse-server/users.d/users.xml
+                        subPath: users.xml
+                    readinessProbe:
+                      httpGet:
+                        path: /ping
+                        port: 8123
+                      initialDelaySeconds: 20
+                      periodSeconds: 10
+                      failureThreshold: 6
+                    livenessProbe:
+                      httpGet:
+                        path: /ping
+                        port: 8123
+                      initialDelaySeconds: 30
+                      periodSeconds: 30
+                volumes:
+                  - name: clickhouse-config
+                    configMap:
+                      name: clickhouse-config
+            volumeClaimTemplates:
+              - metadata:
+                  name: clickhouse-data
+                spec:
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 20Gi
+        mode: "0644"
+
+    # --- Plausible Secret ---
+
+    - name: Create Plausible Secret manifest
+      copy:
+        dest: /tmp/plausible-manifests/plausible-secret.yml
+        content: |
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: plausible-secrets
+            namespace: {{ plausible_namespace }}
+          type: Opaque
+          stringData:
+            SECRET_KEY_BASE: "{{ plausible_secret_key }}"
+            DATABASE_URL: "postgresql://plausible:{{ plausible_db_password }}@{{ db_host }}:5432/plausible_db"
+            CLICKHOUSE_DATABASE_URL: "http://clickhouse.{{ plausible_namespace }}.svc.cluster.local:8123/plausible_events_db"
+        mode: "0600"
+
+    # --- Plausible Deployment + Service ---
+
+    - name: Create Plausible Deployment and Service manifest
+      copy:
+        dest: /tmp/plausible-manifests/plausible.yml
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: plausible
+            namespace: {{ plausible_namespace }}
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: plausible
+            template:
+              metadata:
+                labels:
+                  app: plausible
+              spec:
+                containers:
+                  - name: plausible
+                    image: ghcr.io/plausible/community-edition:{{ plausible_version }}
+                    # Official startup: createdb + migrate + run in one command
+                    command: ["/bin/sh", "-c", "/entrypoint.sh db createdb && /entrypoint.sh db migrate && /entrypoint.sh run"]
+                    ports:
+                      - containerPort: 8000
+                        name: http
+                    env:
+                      - name: BASE_URL
+                        value: "{{ plausible_base_url }}"
+                      - name: SECRET_KEY_BASE
+                        valueFrom:
+                          secretKeyRef:
+                            name: plausible-secrets
+                            key: SECRET_KEY_BASE
+                      - name: DATABASE_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: plausible-secrets
+                            key: DATABASE_URL
+                      - name: CLICKHOUSE_DATABASE_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: plausible-secrets
+                            key: CLICKHOUSE_DATABASE_URL
+                      - name: DISABLE_REGISTRATION
+                        value: "invite_only"
+                      # Disable Erlang busy-waiting to reduce idle CPU
+                      - name: ERL_FLAGS
+                        value: "+sbwt none +sbwtdcpu none +sbwtdio none"
+                      - name: TMPDIR
+                        value: /var/lib/plausible/tmp
+                    volumeMounts:
+                      - name: plausible-data
+                        mountPath: /var/lib/plausible
+                    resources:
+                      requests:
+                        memory: "256Mi"
+                        cpu: "100m"
+                      limits:
+                        memory: "512Mi"
+                        cpu: "500m"
+                    readinessProbe:
+                      httpGet:
+                        path: /api/health
+                        port: 8000
+                      initialDelaySeconds: 60
+                      periodSeconds: 15
+                      failureThreshold: 6
+                    livenessProbe:
+                      httpGet:
+                        path: /api/health
+                        port: 8000
+                      initialDelaySeconds: 90
+                      periodSeconds: 30
+                volumes:
+                  - name: plausible-data
+                    persistentVolumeClaim:
+                      claimName: plausible-data
+          ---
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: plausible-data
+            namespace: {{ plausible_namespace }}
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 5Gi
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: plausible
+            namespace: {{ plausible_namespace }}
+          spec:
+            type: ClusterIP
+            selector:
+              app: plausible
+            ports:
+              - name: http
+                port: 8000
+                targetPort: 8000
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: plausible
+            namespace: {{ plausible_namespace }}
+            annotations:
+              nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+              nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+          spec:
+            ingressClassName: nginx
+            rules:
+              - host: {{ plausible_domain }}
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: plausible
+                          port:
+                            number: 8000
+        mode: "0644"
+
+    # --- Apply all manifests ---
+
+    - name: Apply ClickHouse ConfigMap
+      shell: kubectl apply -f /tmp/plausible-manifests/clickhouse-config.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Apply ClickHouse StatefulSet and Service
+      shell: kubectl apply -f /tmp/plausible-manifests/clickhouse.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Apply Plausible Secret
+      shell: kubectl apply -f /tmp/plausible-manifests/plausible-secret.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Wait for ClickHouse to be ready before deploying Plausible
+      shell: kubectl rollout status statefulset/clickhouse -n {{ plausible_namespace }} --timeout=300s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      retries: 3
+      delay: 15
+      register: ch_rollout
+      until: ch_rollout.rc == 0
+
+    - name: Apply Plausible Deployment and Service
+      shell: kubectl apply -f /tmp/plausible-manifests/plausible.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Wait for Plausible deployment to be ready
+      shell: kubectl rollout status deployment/plausible -n {{ plausible_namespace }} --timeout=300s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      retries: 3
+      delay: 15
+      register: plausible_rollout
+      until: plausible_rollout.rc == 0
+
+    - name: Clean up temporary manifest files
+      file:
+        path: /tmp/plausible-manifests
+        state: absent
+
+    - name: Display K3s deployment status
+      shell: |
+        echo "=== Pods ==="
+        kubectl get pods -n {{ plausible_namespace }}
+        echo ""
+        echo "=== Services ==="
+        kubectl get svc -n {{ plausible_namespace }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: k8s_status
+      changed_when: false
+
+    - name: Show deployment status
+      debug:
+        msg: "{{ k8s_status.stdout_lines }}"
+
+    - name: Display completion summary
+      debug:
+        msg:
+          - "===== Plausible Analytics Setup Complete ====="
+          - ""
+          - "Components deployed:"
+          - "  ✓ PostgreSQL database 'plausible_db' on database-vm (192.168.100.205)"
+          - "  ✓ ClickHouse StatefulSet in K3s namespace 'plausible'"
+          - "  ✓ Plausible Analytics Deployment in K3s namespace 'plausible'"
+          - ""
+          - "Access:"
+          - "  External: https://plausible.tfdevs.com (via ingress → NPM → Cloudflare)"
+          - "  Internal: http://plausible.{{ plausible_namespace }}.svc.cluster.local:8000"
+          - ""
+          - "Next steps:"
+          - "  1. Ensure Terraform NPM proxy host points to 192.168.100.202:30389 (ingress)"
+          - "     with domain plausible.tfdevs.com"
+          - "  2. After first access, create your admin account at /register"
+          - "  3. Set DISABLE_REGISTRATION=true after creating your account:"
+          - "     kubectl -n plausible set env deployment/plausible DISABLE_REGISTRATION=true"
+          - "     kubectl -n plausible rollout restart deployment/plausible"

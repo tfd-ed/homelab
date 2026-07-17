@@ -1,0 +1,1030 @@
+{
+  "name": "Backend Bootcamp — Registration Form (No Backend Required)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔐 SECTION 1 — Google OAuth Pre-Auth\n\nThis section handles Google sign-in **before** the registration form is shown.\n\n**Flow:**\n1. User visits `/webhook/bootcamp/auth/start`\n2. Redirected to Google consent screen\n3. Google returns to `/webhook/bootcamp/auth/callback?code=...`\n4. n8n exchanges code → gets user profile → registers session in backend\n5. Backend returns a signed `sessionToken`\n6. User is redirected to `/form/bootcamp-registration?token=<sessionToken>`\n\n**Required env variables:**\n- `GOOGLE_CLIENT_ID`\n- `GOOGLE_CLIENT_SECRET`\n- `BACKEND_URL`\n- `N8N_BASE_URL`",
+        "height": 280,
+        "width": 480,
+        "color": 4
+      },
+      "id": "00000001-0000-4000-8000-000000000001",
+      "name": "Note — Google OAuth Flow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-80, -600]
+    },
+    {
+      "parameters": {
+        "content": "## ⚙️ Required Environment Variables\n\n| Variable | Description |\n|---|---|\n| `GOOGLE_CLIENT_ID` | Google OAuth App Client ID |\n| `GOOGLE_CLIENT_SECRET` | Google OAuth App Client Secret |\n| `BACKEND_URL` | Express.js backend base URL |\n| `N8N_BASE_URL` | Your n8n instance public URL |\n| `TELEGRAM_LIVE_GROUP_LINK` | Invite link for live class Telegram group |\n| `TELEGRAM_VIDEO_GROUP_LINK` | Invite link for video course Telegram group |\n| `QR_LIVE_CLASS_URL` | Hosted image URL for live class payment QR |\n| `QR_VIDEO_COURSE_URL` | Hosted image URL for video course payment QR |\n\n⚠️ Replace all placeholder values before activating this workflow.",
+        "height": 280,
+        "width": 460,
+        "color": 5
+      },
+      "id": "00000001-0000-4000-8000-000000000002",
+      "name": "Note — Environment Variables",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, -600]
+    },
+    {
+      "parameters": {
+        "content": "## 📋 SECTION 2 — Registration Form (5 Pages)\n\n| Page | Content |\n|---|---|\n| 1 | Google token + Course selection |\n| 2 | Full name (English + Khmer) |\n| 3 | Academic background |\n| 4 | GitHub, expectations, referral |\n| 5 | Payment QR + screenshot upload |\n| 6 | Confirmation + Telegram group link |",
+        "height": 220,
+        "width": 380,
+        "color": 3
+      },
+      "id": "00000001-0000-4000-8000-000000000003",
+      "name": "Note — Form Pages",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 440]
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "bootcamp/auth/start",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "aa000001-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "name": "Google Auth — Start",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, -380],
+      "webhookId": "b1a10001-c2d3-4e5f-6789-abcdef012345"
+    },
+    {
+      "parameters": {
+        "respondWith": "redirect",
+        "redirectURL": "=https://accounts.google.com/o/oauth2/v2/auth?client_id={{ $env.GOOGLE_CLIENT_ID }}&redirect_uri={{ encodeURIComponent($env.N8N_BASE_URL + '/webhook/bootcamp/auth/callback') }}&response_type=code&scope=openid%20email%20profile&access_type=offline&prompt=select_account",
+        "options": {}
+      },
+      "id": "aa000002-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+      "name": "→ Redirect to Google OAuth",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [260, -380]
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "bootcamp/auth/callback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "aa000003-aaaa-4aaa-8aaa-aaaaaaaaaaac",
+      "name": "Google Auth — Callback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, -180],
+      "webhookId": "b1a10002-c2d3-4e5f-6789-abcdef012346"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "code", "value": "={{ $json.query.code }}" },
+            { "name": "client_id", "value": "={{ $env.GOOGLE_CLIENT_ID }}" },
+            {
+              "name": "client_secret",
+              "value": "={{ $env.GOOGLE_CLIENT_SECRET }}"
+            },
+            {
+              "name": "redirect_uri",
+              "value": "={{ $env.N8N_BASE_URL }}/webhook/bootcamp/auth/callback"
+            },
+            { "name": "grant_type", "value": "authorization_code" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aa000004-aaaa-4aaa-8aaa-aaaaaaaaaaad",
+      "name": "Exchange Code for Token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, -180]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/oauth2/v2/userinfo",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aa000005-aaaa-4aaa-8aaa-aaaaaaaaaaae",
+      "name": "Get Google User Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, -180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/auth/google/session",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ googleId: $json.id, email: $json.email, name: $json.name, picture: $json.picture }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "aa000006-aaaa-4aaa-8aaa-aaaaaaaaaaaf",
+      "name": "Register Session in Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, -180]
+    },
+    {
+      "parameters": {
+        "respondWith": "redirect",
+        "redirectURL": "={{ $env.N8N_BASE_URL }}/form/bootcamp-registration?token={{ encodeURIComponent($json.sessionToken) }}&gname={{ encodeURIComponent($('Get Google User Profile').item.json.name) }}&gemail={{ encodeURIComponent($('Get Google User Profile').item.json.email) }}",
+        "options": {}
+      },
+      "id": "aa000007-aaaa-4aaa-8aaa-aaaaaaaaaaag",
+      "name": "→ Redirect to Registration Form",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, -180]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "🎓 Backend Development Bootcamp — Registration",
+        "formDescription": "<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:18px 20px;margin-bottom:20px'>\n  <p style='margin:0 0 10px;font-weight:600;color:#1e40af;font-size:15px'>🔐 Step 1: Sign in with Google</p>\n  <p style='margin:0 0 14px;color:#3b5a9a;font-size:13px'>To prevent duplicate registrations, you must authenticate with your Google account first. A session token will be sent to your email after sign-in.</p>\n  <a href='/webhook/bootcamp/auth/start' target='_blank' style='display:inline-flex;align-items:center;gap:10px;padding:11px 20px;background:#fff;border:1px solid #dadce0;border-radius:6px;color:#3c4043;font-weight:600;text-decoration:none;font-size:14px;box-shadow:0 1px 4px rgba(0,0,0,0.12)'>\n    <svg width='18' height='18' viewBox='0 0 48 48'><path fill='#EA4335' d='M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z'/><path fill='#4285F4' d='M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z'/><path fill='#FBBC05' d='M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z'/><path fill='#34A853' d='M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z'/></svg>\n    Continue with Google\n  </a>\n  <p style='margin:12px 0 0;color:#64748b;font-size:12px'>After signing in, copy the session token from the redirect page and paste it below.</p>\n</div>\n<p style='color:#475569;font-size:14px;margin:0 0 4px'>📌 Select the track that fits your learning style:</p>",
+        "path": "bootcamp-registration",
+        "responseMode": "lastNode",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Google Session Token",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "Paste your session token here (obtained after Google sign-in above)"
+            },
+            {
+              "fieldLabel": "Select Your Learning Track",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "🎬 Self-Paced Video Course — $29.99 (Lifetime access, learn at your own pace, new content added regularly)"
+                  },
+                  {
+                    "option": "🎓 Live Online Class — $49.99 (Instructor-led, real-time Q&A, starts July 15 2026 · Tue & Thu 7–9 PM PNH)"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 1 of 5 — Choose Your Track",
+          "buttonLabel": "Continue →"
+        }
+      },
+      "id": "bb000001-bbbb-4bbb-8bbb-bbbbbbbbbb01",
+      "name": "Form — Page 1: Auth + Course Selection",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [0, 200],
+      "webhookId": "cc000001-dddd-4eee-8fff-000000000001"
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/auth/verify-session",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ token: $json['Google Session Token'] }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "bb000002-bbbb-4bbb-8bbb-bbbbbbbbbb02",
+      "name": "Verify Auth Token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 200]
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "token-valid-check",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "bb000003-bbbb-4bbb-8bbb-bbbbbbbbbb03",
+      "name": "Auth Token Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [560, 200]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "⚠️ Authentication Failed",
+        "formDescription": "<div style='text-align:center;padding:32px 20px'><div style='font-size:52px;margin-bottom:16px'>🔒</div><h2 style='color:#dc2626;margin:0 0 12px;font-size:20px'>Session Expired or Invalid</h2><p style='color:#64748b;margin:0 0 24px;font-size:14px'>Your Google session token is invalid, expired, or already used.<br/>Please sign in again to get a fresh token.</p><a href='/webhook/bootcamp/auth/start' style='display:inline-block;padding:12px 28px;background:#4285f4;color:#fff;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px'>🔐 Sign in with Google</a></div>",
+        "formFields": { "values": [] },
+        "options": {
+          "formTitle": "Authentication Error",
+          "buttonLabel": "← Retry Sign-In"
+        }
+      },
+      "id": "bb000004-bbbb-4bbb-8bbb-bbbbbbbbbb04",
+      "name": "Form — Auth Error",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [840, 400]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Personal Information",
+        "formDescription": "<p style='color:#64748b;font-size:14px;margin:0 0 4px'>Please enter your full name exactly as it appears on your official ID, in <strong>both English and Khmer</strong>.</p>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "First Name — English",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "e.g. Dara"
+            },
+            {
+              "fieldLabel": "Last Name — English",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "e.g. Chan"
+            },
+            {
+              "fieldLabel": "ឈ្មោះ — ខ្មែរ / First Name (Khmer)",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "ឧ. ដារ៉ា"
+            },
+            {
+              "fieldLabel": "នាមត្រកូល — ខ្មែរ / Last Name (Khmer)",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "ឧ. ចាន់"
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 2 of 5 — Personal Information",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "bb000005-bbbb-4bbb-8bbb-bbbbbbbbbb05",
+      "name": "Form — Page 2: Personal Information",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [840, 200]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Academic Background",
+        "formDescription": "<p style='color:#64748b;font-size:14px;margin:0'>Tell us about your current education so we can better support your learning journey.</p>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Current Academic Year",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "High School (Grade 9–12)" },
+                  { "option": "University — Year 1" },
+                  { "option": "University — Year 2" },
+                  { "option": "University — Year 3" },
+                  { "option": "University — Year 4" },
+                  { "option": "University — Year 5+" },
+                  { "option": "Graduate Student (Master's / PhD)" },
+                  { "option": "Working Professional" },
+                  { "option": "Career Changer" },
+                  { "option": "Other" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Major / Field of Study",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "e.g. Computer Science, Information Technology, Business Administration"
+            },
+            {
+              "fieldLabel": "Institution / University (optional)",
+              "fieldType": "text",
+              "requiredField": false,
+              "placeholder": "e.g. RUPP, ITC, Norton University, PUCIT"
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 3 of 5 — Academic Background",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "bb000006-bbbb-4bbb-8bbb-bbbbbbbbbb06",
+      "name": "Form — Page 3: Academic Background",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1120, 200]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Profile & Motivation",
+        "formDescription": "<p style='color:#64748b;font-size:14px;margin:0'>Help us understand your technical background, goals, and how you found us.</p>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "GitHub Username",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "your-github-username (no @ symbol, e.g. darachan)"
+            },
+            {
+              "fieldLabel": "Current Programming Experience Level",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "🆕 No experience — I am starting from zero" },
+                  {
+                    "option": "🌱 Basic — I know some HTML/CSS or Python basics"
+                  },
+                  {
+                    "option": "🔨 Intermediate — I have built small projects (React, Flask, etc.)"
+                  },
+                  {
+                    "option": "⚡ Advanced — I have professional development experience"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "What are your expectations from this bootcamp?",
+              "fieldType": "textarea",
+              "requiredField": true,
+              "placeholder": "e.g. I want to learn how to build and deploy REST APIs with Node.js + Express, understand MongoDB schema design, and build a full backend system I can showcase in my portfolio..."
+            },
+            {
+              "fieldLabel": "How did you hear about this bootcamp?",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "Facebook" },
+                  { "option": "Telegram Group / Channel" },
+                  { "option": "Friend / Referral" },
+                  { "option": "YouTube" },
+                  { "option": "Google Search" },
+                  { "option": "Instagram" },
+                  { "option": "TikTok" },
+                  { "option": "LinkedIn" },
+                  { "option": "Other" }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 4 of 5 — Profile & Motivation",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "bb000007-bbbb-4bbb-8bbb-bbbbbbbbbb07",
+      "name": "Form — Page 4: Profile & Motivation",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1400, 200]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-course-type",
+              "name": "courseType",
+              "value": "={{ $('Form — Page 1: Auth + Course Selection').item.json['Select Your Learning Track'].includes('Live') ? 'live' : 'video' }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-price",
+              "name": "price",
+              "value": "={{ $('Form — Page 1: Auth + Course Selection').item.json['Select Your Learning Track'].includes('Live') ? '$49.99' : '$29.99' }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-track-name",
+              "name": "trackName",
+              "value": "={{ $('Form — Page 1: Auth + Course Selection').item.json['Select Your Learning Track'].includes('Live') ? 'Live Online Class' : 'Self-Paced Video Course' }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-qr-url",
+              "name": "qrImageUrl",
+              "value": "={{ $('Form — Page 1: Auth + Course Selection').item.json['Select Your Learning Track'].includes('Live') ? ($env.QR_LIVE_CLASS_URL ?? 'https://placehold.co/280x280/0ea5e9/ffffff?text=QR+Code%0A%F0%9F%8E%93+Live+Class%0A%2449.99') : ($env.QR_VIDEO_COURSE_URL ?? 'https://placehold.co/280x280/8b5cf6/ffffff?text=QR+Code%0A%F0%9F%8E%AC+Video+Course%0A%2429.99') }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-bank-note",
+              "name": "bankNote",
+              "value": "ABA Bank · ACLEDA · Wing · Pi Pay · True Money accepted",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cc000001-cccc-4ccc-8ccc-cccccccccc01",
+      "name": "Set Payment QR Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1680, 200]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Complete Your Payment",
+        "formDescription": "={{ '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:16px 20px;margin-bottom:20px\"><strong style=\"color:#166534\">✅ Almost done! One final step.</strong><br/><span style=\"color:#15803d;font-size:13px\">Your registration details have been saved. Complete payment to confirm your seat.</span></div>' + '<div style=\"background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;text-align:center;margin-bottom:20px\">' + '<p style=\"margin:0 0 4px;color:#64748b;font-size:13px\">Your selected track</p>' + '<h3 style=\"margin:0 0 6px;color:#1e293b;font-size:18px\">' + $json.trackName + '</h3>' + '<p style=\"font-size:32px;font-weight:800;color:#0ea5e9;margin:0 0 4px\">' + $json.price + '</p>' + '<p style=\"color:#94a3b8;font-size:12px;margin:0\">One-time payment · No recurring charges</p>' + '</div>' + '<div style=\"text-align:center;margin-bottom:20px\">' + '<p style=\"color:#475569;font-weight:600;font-size:14px;margin:0 0 14px\">📱 Scan the QR code to pay:</p>' + '<div style=\"background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:18px;display:inline-block\">' + '<img src=\"' + $json.qrImageUrl + '\" alt=\"Payment QR Code for ' + $json.trackName + '\" style=\"width:280px;height:280px;display:block;border-radius:8px\" />' + '</div>' + '<p style=\"color:#94a3b8;font-size:12px;margin:12px 0 0\">' + $json.bankNote + '</p>' + '</div>' + '<p style=\"color:#64748b;font-size:13px;margin:0\">⬇️ After paying, <strong>upload a screenshot</strong> of your payment receipt below. Our team will verify within 24 hours.</p>' }}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Payment Screenshot",
+              "fieldType": "file",
+              "requiredField": true,
+              "acceptFileTypes": ".jpg,.jpeg,.png,.pdf",
+              "multipleFiles": false
+            },
+            {
+              "fieldLabel": "Transaction ID / Reference Number (optional)",
+              "fieldType": "text",
+              "requiredField": false,
+              "placeholder": "e.g. TXN-2026XXXXXX or last 6 digits of your transfer"
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 5 of 5 — Payment",
+          "buttonLabel": "Submit Registration 🎉"
+        }
+      },
+      "id": "bb000008-bbbb-4bbb-8bbb-bbbbbbbbbb08",
+      "name": "Form — Page 5: Payment",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1960, 200]
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "course-live-check",
+              "leftValue": "={{ $('Set Payment QR Data').item.json.courseType }}",
+              "rightValue": "live",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cc000002-cccc-4ccc-8ccc-cccccccccc02",
+      "name": "Live Class or Video?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2240, 200]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "live-telegram-link",
+              "name": "telegramGroupLink",
+              "value": "={{ $env.TELEGRAM_LIVE_GROUP_LINK ?? 'https://t.me/+REPLACE_WITH_LIVE_INVITE_LINK' }}",
+              "type": "string"
+            },
+            {
+              "id": "live-class-start",
+              "name": "classStartDate",
+              "value": "July 15, 2026",
+              "type": "string"
+            },
+            {
+              "id": "live-schedule",
+              "name": "classSchedule",
+              "value": "Every Tuesday & Thursday · 7:00 PM – 9:00 PM (Phnom Penh Time, GMT+7)",
+              "type": "string"
+            },
+            {
+              "id": "live-track-label",
+              "name": "trackLabel",
+              "value": "Live Online Class",
+              "type": "string"
+            },
+            {
+              "id": "live-telegram-label",
+              "name": "telegramGroupLabel",
+              "value": "🎓 Live Class Community",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cc000003-cccc-4ccc-8ccc-cccccccccc03",
+      "name": "Set — Live Class Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2520, 0]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "video-telegram-link",
+              "name": "telegramGroupLink",
+              "value": "={{ $env.TELEGRAM_VIDEO_GROUP_LINK ?? 'https://t.me/+REPLACE_WITH_VIDEO_INVITE_LINK' }}",
+              "type": "string"
+            },
+            {
+              "id": "video-class-start",
+              "name": "classStartDate",
+              "value": "Immediate — start learning today after payment verification",
+              "type": "string"
+            },
+            {
+              "id": "video-schedule",
+              "name": "classSchedule",
+              "value": "Self-paced · Lifetime access · Learn anytime, anywhere",
+              "type": "string"
+            },
+            {
+              "id": "video-track-label",
+              "name": "trackLabel",
+              "value": "Self-Paced Video Course",
+              "type": "string"
+            },
+            {
+              "id": "video-telegram-label",
+              "name": "telegramGroupLabel",
+              "value": "🎬 Video Course Community",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cc000004-cccc-4ccc-8ccc-cccccccccc04",
+      "name": "Set — Video Course Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2520, 400]
+    },
+
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "input1",
+        "options": {}
+      },
+      "id": "cc000005-cccc-4ccc-8ccc-cccccccccc05",
+      "name": "Merge — Course Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2800, 200]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BACKEND_URL }}/api/registration",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "courseType",
+              "value": "={{ $('Set Payment QR Data').item.json.courseType }}"
+            },
+            {
+              "name": "googleSessionToken",
+              "value": "={{ $('Form — Page 1: Auth + Course Selection').item.json['Google Session Token'] }}"
+            },
+            {
+              "name": "firstNameEn",
+              "value": "={{ $('Form — Page 2: Personal Information').item.json['First Name — English'] }}"
+            },
+            {
+              "name": "lastNameEn",
+              "value": "={{ $('Form — Page 2: Personal Information').item.json['Last Name — English'] }}"
+            },
+            {
+              "name": "firstNameKh",
+              "value": "={{ $('Form — Page 2: Personal Information').item.json['ឈ្មោះ — ខ្មែរ / First Name (Khmer)'] }}"
+            },
+            {
+              "name": "lastNameKh",
+              "value": "={{ $('Form — Page 2: Personal Information').item.json['នាមត្រកូល — ខ្មែរ / Last Name (Khmer)'] }}"
+            },
+            {
+              "name": "academicYear",
+              "value": "={{ $('Form — Page 3: Academic Background').item.json['Current Academic Year'] }}"
+            },
+            {
+              "name": "major",
+              "value": "={{ $('Form — Page 3: Academic Background').item.json['Major / Field of Study'] }}"
+            },
+            {
+              "name": "institution",
+              "value": "={{ $('Form — Page 3: Academic Background').item.json['Institution / University (optional)'] ?? '' }}"
+            },
+            {
+              "name": "githubUsername",
+              "value": "={{ $('Form — Page 4: Profile & Motivation').item.json['GitHub Username'] }}"
+            },
+            {
+              "name": "experienceLevel",
+              "value": "={{ $('Form — Page 4: Profile & Motivation').item.json['Current Programming Experience Level'] }}"
+            },
+            {
+              "name": "expectations",
+              "value": "={{ $('Form — Page 4: Profile & Motivation').item.json['What are your expectations from this bootcamp?'] }}"
+            },
+            {
+              "name": "referralSource",
+              "value": "={{ $('Form — Page 4: Profile & Motivation').item.json['How did you hear about this bootcamp?'] }}"
+            },
+            {
+              "name": "paymentTransactionId",
+              "value": "={{ $('Form — Page 5: Payment').item.json['Transaction ID / Reference Number (optional)'] ?? '' }}"
+            },
+            {
+              "name": "telegramGroupLink",
+              "value": "={{ $json.telegramGroupLink }}"
+            },
+            {
+              "name": "classStartDate",
+              "value": "={{ $json.classStartDate }}"
+            }
+          ]
+        },
+        "sendBinaryData": true,
+        "binaryPropertyName": "Payment Screenshot",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "cc000006-cccc-4ccc-8ccc-cccccccccc06",
+      "name": "Submit Registration to Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3080, 200]
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "submit-success-check",
+              "leftValue": "={{ $json.registrationId }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "isNotEmpty" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cc000007-cccc-4ccc-8ccc-cccccccccc07",
+      "name": "Submission Successful?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3360, 200]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "confirm-reg-id",
+              "name": "registrationId",
+              "value": "={{ $json.registrationId }}",
+              "type": "string"
+            },
+            {
+              "id": "confirm-track",
+              "name": "confirmTrackLabel",
+              "value": "={{ $('Merge — Course Data').item.json.trackLabel }}",
+              "type": "string"
+            },
+            {
+              "id": "confirm-price",
+              "name": "confirmPrice",
+              "value": "={{ $('Set Payment QR Data').item.json.price }}",
+              "type": "string"
+            },
+            {
+              "id": "confirm-schedule",
+              "name": "confirmSchedule",
+              "value": "={{ $('Merge — Course Data').item.json.classSchedule }}",
+              "type": "string"
+            },
+            {
+              "id": "confirm-start",
+              "name": "confirmStartDate",
+              "value": "={{ $('Merge — Course Data').item.json.classStartDate }}",
+              "type": "string"
+            },
+            {
+              "id": "confirm-telegram",
+              "name": "confirmTelegramLink",
+              "value": "={{ $('Merge — Course Data').item.json.telegramGroupLink }}",
+              "type": "string"
+            },
+            {
+              "id": "confirm-telegram-label",
+              "name": "confirmTelegramLabel",
+              "value": "={{ $('Merge — Course Data').item.json.telegramGroupLabel }}",
+              "type": "string"
+            },
+            {
+              "id": "confirm-name",
+              "name": "confirmName",
+              "value": "={{ $('Form — Page 2: Personal Information').item.json['First Name — English'] + ' ' + $('Form — Page 2: Personal Information').item.json['Last Name — English'] }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cc000008-cccc-4ccc-8ccc-cccccccccc08",
+      "name": "Set — Confirmation Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [3640, 0]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "🎉 You're Registered!",
+        "formDescription": "={{ '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px\"><div style=\"font-size:56px;margin-bottom:10px\">🎉</div><h2 style=\"color:#166534;margin:0 0 8px;font-size:22px\">Registration Received, ' + $json.confirmName + '!</h2><p style=\"color:#15803d;margin:0;font-size:14px\">Your payment screenshot is under review. We will confirm within <strong>24 hours</strong>.</p></div>' + '<div style=\"background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;margin-bottom:16px\"><h3 style=\"color:#1e293b;margin:0 0 14px;font-size:15px;font-weight:600\">📋 Registration Summary</h3><table style=\"width:100%;border-collapse:collapse;font-size:14px\"><tr style=\"border-bottom:1px solid #f1f5f9\"><td style=\"padding:9px 0;color:#64748b;width:38%\">Track</td><td style=\"padding:9px 0;font-weight:600;color:#1e293b\">' + $json.confirmTrackLabel + '</td></tr><tr style=\"border-bottom:1px solid #f1f5f9\"><td style=\"padding:9px 0;color:#64748b\">Price Paid</td><td style=\"padding:9px 0;font-weight:600;color:#0ea5e9\">' + $json.confirmPrice + '</td></tr><tr style=\"border-bottom:1px solid #f1f5f9\"><td style=\"padding:9px 0;color:#64748b\">Schedule</td><td style=\"padding:9px 0;color:#1e293b\">' + $json.confirmSchedule + '</td></tr><tr><td style=\"padding:9px 0;color:#64748b\">Start Date</td><td style=\"padding:9px 0;font-weight:600;color:#166534\">' + $json.confirmStartDate + '</td></tr></table></div>' + '<div style=\"background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:20px;margin-bottom:16px\"><h3 style=\"color:#1e40af;margin:0 0 10px;font-size:15px;font-weight:600\">📱 Join Your Telegram Community</h3><p style=\"color:#3b5a9a;margin:0 0 14px;font-size:13px\">Once your payment is verified, your access will be activated. You can request to join now:</p><a href=\"' + $json.confirmTelegramLink + '\" target=\"_blank\" style=\"display:inline-block;padding:12px 28px;background:#0088cc;color:#fff;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px\">' + $json.confirmTelegramLabel + ' →</a></div>' + '<div style=\"background:#fef9e7;border:1px solid #fcd34d;border-radius:8px;padding:14px 16px\"><p style=\"color:#92400e;margin:0;font-size:13px\">⏳ <strong>Next steps:</strong> Our admin will verify your payment and send you a confirmation message on Telegram. If you have questions, message us at <a href=\"https://t.me/bootcamp_admin\" style=\"color:#b45309\">@bootcamp_admin</a>.</p></div>' }}",
+        "formFields": { "values": [] },
+        "options": {
+          "formTitle": "Registration Complete ✓",
+          "buttonLabel": "Done ✓"
+        }
+      },
+      "id": "bb000009-bbbb-4bbb-8bbb-bbbbbbbbbb09",
+      "name": "Form — Page 6: Registration Complete",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [3920, 0]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "⚠️ Submission Error",
+        "formDescription": "<div style='text-align:center;padding:32px 20px'><div style='font-size:52px;margin-bottom:14px'>⚠️</div><h2 style='color:#dc2626;margin:0 0 10px;font-size:20px'>Could Not Save Your Registration</h2><p style='color:#64748b;margin:0 0 6px;font-size:14px'>Something went wrong on our end. Your data was not lost — please try submitting again.</p><p style='color:#64748b;font-size:13px'>If this keeps happening, please contact us directly:</p><p style='margin:16px 0 0'><a href='https://t.me/bootcamp_admin' style='padding:11px 24px;background:#0088cc;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px'>💬 Contact Admin on Telegram</a></p></div>",
+        "formFields": { "values": [] },
+        "options": {
+          "formTitle": "Error — Please Retry",
+          "buttonLabel": "← Go Back & Retry"
+        }
+      },
+      "id": "bb000010-bbbb-4bbb-8bbb-bbbbbbbbbb10",
+      "name": "Form — Submission Error",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [3640, 400]
+    }
+  ],
+
+  "connections": {
+    "Google Auth — Start": {
+      "main": [
+        [{ "node": "→ Redirect to Google OAuth", "type": "main", "index": 0 }]
+      ]
+    },
+    "Google Auth — Callback": {
+      "main": [
+        [{ "node": "Exchange Code for Token", "type": "main", "index": 0 }]
+      ]
+    },
+    "Exchange Code for Token": {
+      "main": [
+        [{ "node": "Get Google User Profile", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Google User Profile": {
+      "main": [
+        [{ "node": "Register Session in Backend", "type": "main", "index": 0 }]
+      ]
+    },
+    "Register Session in Backend": {
+      "main": [
+        [
+          {
+            "node": "→ Redirect to Registration Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Form — Page 1: Auth + Course Selection": {
+      "main": [[{ "node": "Verify Auth Token", "type": "main", "index": 0 }]]
+    },
+    "Verify Auth Token": {
+      "main": [[{ "node": "Auth Token Valid?", "type": "main", "index": 0 }]]
+    },
+    "Auth Token Valid?": {
+      "main": [
+        [
+          {
+            "node": "Form — Page 2: Personal Information",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [{ "node": "Form — Auth Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 2: Personal Information": {
+      "main": [
+        [
+          {
+            "node": "Form — Page 3: Academic Background",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Form — Page 3: Academic Background": {
+      "main": [
+        [
+          {
+            "node": "Form — Page 4: Profile & Motivation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Form — Page 4: Profile & Motivation": {
+      "main": [[{ "node": "Set Payment QR Data", "type": "main", "index": 0 }]]
+    },
+    "Set Payment QR Data": {
+      "main": [
+        [{ "node": "Form — Page 5: Payment", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 5: Payment": {
+      "main": [[{ "node": "Live Class or Video?", "type": "main", "index": 0 }]]
+    },
+    "Live Class or Video?": {
+      "main": [
+        [{ "node": "Set — Live Class Data", "type": "main", "index": 0 }],
+        [{ "node": "Set — Video Course Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set — Live Class Data": {
+      "main": [[{ "node": "Merge — Course Data", "type": "main", "index": 0 }]]
+    },
+    "Set — Video Course Data": {
+      "main": [[{ "node": "Merge — Course Data", "type": "main", "index": 1 }]]
+    },
+    "Merge — Course Data": {
+      "main": [
+        [
+          {
+            "node": "Submit Registration to Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit Registration to Backend": {
+      "main": [
+        [{ "node": "Submission Successful?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Submission Successful?": {
+      "main": [
+        [{ "node": "Set — Confirmation Data", "type": "main", "index": 0 }],
+        [{ "node": "Form — Submission Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set — Confirmation Data": {
+      "main": [
+        [
+          {
+            "node": "Form — Page 6: Registration Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "versionId": "f1a20000-1234-4567-89ab-cdef01234567",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "REPLACE_WITH_YOUR_N8N_INSTANCE_ID"
+  },
+  "id": "a0b1c2d3-e4f5-6789-abcd-ef0123456789",
+  "tags": [
+    {
+      "createdAt": "2026-06-17T00:00:00.000Z",
+      "updatedAt": "2026-06-17T00:00:00.000Z",
+      "id": "tag-bootcamp-01",
+      "name": "bootcamp"
+    },
+    {
+      "createdAt": "2026-06-17T00:00:00.000Z",
+      "updatedAt": "2026-06-17T00:00:00.000Z",
+      "id": "tag-bootcamp-02",
+      "name": "registration"
+    },
+    {
+      "createdAt": "2026-06-17T00:00:00.000Z",
+      "updatedAt": "2026-06-17T00:00:00.000Z",
+      "id": "tag-bootcamp-03",
+      "name": "form"
+    }
+  ]
+}

@@ -1,0 +1,566 @@
+{
+  "name": "Bootcamp Registration — Simple Form (No Auth)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📝 SIMPLE REGISTRATION FORM\n\n**No authentication required** — Direct registration form\n\n✅ 4-page form (track, personal info, background, payment)\n✅ Upload to Google Drive\n✅ Save to MongoDB\n✅ Telegram admin notification\n✅ Course selection with dynamic pricing\n\n**Required:**\n- MongoDB connection\n- Google Drive folder\n- Telegram bot\n\n⚠️ **Note:** No duplicate prevention without auth",
+        "height": 280,
+        "width": 380,
+        "color": 4
+      },
+      "id": "note-001",
+      "name": "📌 Note — Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-40, -400]
+    },
+    {
+      "parameters": {
+        "content": "## ⚙️ Required Environment Variables\n\n| Variable | Value |\n|---|---|\n| `N8N_BASE_URL` | https://your-n8n.com |\n| `MONGODB_URI` | mongodb+srv://... |\n| `MONGODB_DATABASE` | bootcamp |\n| `GDRIVE_FOLDER_ID` | Google Drive folder ID |\n| `TELEGRAM_BOT_TOKEN` | bot-token |\n| `TELEGRAM_ADMIN_CHAT_ID` | admin-chat-id |\n| `TELEGRAM_LIVE_GROUP` | t.me/+live |\n| `TELEGRAM_VIDEO_GROUP` | t.me/+video |\n| `PAYMENT_LIVE_URL` | Payment gateway link ($49.99) |\n| `PAYMENT_VIDEO_URL` | Payment gateway link ($29.99) |",
+        "height": 280,
+        "width": 400,
+        "color": 5
+      },
+      "id": "note-002",
+      "name": "📌 Note — Environment Variables",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [360, -400]
+    },
+    {
+      "parameters": {
+        "content": "## � Payment Gateway Setup\n\n**Get payment links from your provider:**\n\n**ABA PayWay:**\n- Create payment link for $49.99 (Live)\n- Create payment link for $29.99 (Video)\n\n**Wing/Pi Pay/True Money:**\n- Generate payment request link\n- Set amount and description\n\n**Stripe/PayPal:**\n- Create payment link in dashboard\n- Set fixed amounts\n\n**Add to environment variables:**\n- `PAYMENT_LIVE_URL` = link for $49.99\n- `PAYMENT_VIDEO_URL` = link for $29.99\n\n✅ Users click → Pay → Upload receipt",
+        "height": 340,
+        "width": 380,
+        "color": 6
+      },
+      "id": "note-003",
+      "name": "📌 Note — Payment Gateway",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [780, -400]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "🎓 Backend Development Bootcamp",
+        "formDescription": "<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:20px;margin-bottom:20px;text-align:center'><h2 style='color:#1e40af;margin:0 0 12px;font-size:20px'>Choose Your Learning Track</h2><p style='color:#64748b;margin:0;font-size:14px'>Select the option that best fits your learning style and schedule</p></div><div style='display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px'><div style='background:#fff;border:2px solid #e2e8f0;border-radius:10px;padding:16px;text-align:center'><div style='font-size:36px;margin-bottom:8px'>🎬</div><h3 style='margin:0 0 8px;color:#1e293b;font-size:16px'>Self-Paced Video</h3><p style='color:#0ea5e9;font-weight:800;font-size:24px;margin:0 0 8px'>$29.99</p><p style='color:#64748b;font-size:12px;margin:0'>Lifetime access<br/>Learn anytime<br/>New content added</p></div><div style='background:#fff;border:2px solid #e2e8f0;border-radius:10px;padding:16px;text-align:center'><div style='font-size:36px;margin-bottom:8px'>🎓</div><h3 style='margin:0 0 8px;color:#1e293b;font-size:16px'>Live Online Class</h3><p style='color:#0ea5e9;font-weight:800;font-size:24px;margin:0 0 8px'>$49.99</p><p style='color:#64748b;font-size:12px;margin:0'>Starts July 15<br/>Tue & Thu 7-9 PM<br/>Real-time Q&A</p></div></div>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Select Your Track",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "🎬 Self-Paced Video Course — $29.99" },
+                  { "option": "🎓 Live Online Class — $49.99" }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 1/4 — Choose Track",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "form-page1",
+      "name": "Form — Page 1: Track Selection",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [0, 100],
+      "webhookId": "simple-form-page-1"
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Personal Information",
+        "formDescription": "<p style='color:#64748b;font-size:14px;margin:0'>Please provide your full name in both English and Khmer</p>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Email Address",
+              "fieldType": "email",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "your.email@example.com" }
+            },
+            {
+              "fieldLabel": "First Name (English)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "e.g. Dara" }
+            },
+            {
+              "fieldLabel": "Last Name (English)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "e.g. Chan" }
+            },
+            {
+              "fieldLabel": "ឈ្មោះ (First Name - Khmer)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "ឧ. ដារ៉ា" }
+            },
+            {
+              "fieldLabel": "នាមត្រកូល (Last Name - Khmer)",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "ឧ. ចាន់" }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 2/4 — Personal Information",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "form-page2",
+      "name": "Form — Page 2: Personal Info",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [280, 100]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Academic Background & Profile",
+        "formDescription": "<p style='color:#64748b;font-size:14px;margin:0'>Tell us about your education and technical background</p>",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Current Academic Year",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "High School (Grade 9-12)" },
+                  { "option": "University — Year 1" },
+                  { "option": "University — Year 2" },
+                  { "option": "University — Year 3" },
+                  { "option": "University — Year 4" },
+                  { "option": "University — Year 5+" },
+                  { "option": "Graduate Student" },
+                  { "option": "Working Professional" },
+                  { "option": "Career Changer" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Major / Field of Study",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": {
+                "placeholder": "e.g. Computer Science, IT, Business"
+              }
+            },
+            {
+              "fieldLabel": "Institution / University (optional)",
+              "fieldType": "text",
+              "requiredField": false,
+              "fieldOptions": { "placeholder": "e.g. RUPP, ITC, Norton" }
+            },
+            {
+              "fieldLabel": "GitHub Username",
+              "fieldType": "text",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "your-username (no @ symbol)" }
+            },
+            {
+              "fieldLabel": "Programming Experience Level",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "🆕 No experience — Starting from zero" },
+                  { "option": "🌱 Basic — Know HTML/CSS or Python basics" },
+                  { "option": "🔨 Intermediate — Built small projects" },
+                  { "option": "⚡ Advanced — Professional experience" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "What are your expectations from this bootcamp?",
+              "fieldType": "textarea",
+              "requiredField": true,
+              "fieldOptions": { "placeholder": "I want to learn..." }
+            },
+            {
+              "fieldLabel": "How did you hear about this bootcamp?",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "Facebook" },
+                  { "option": "Telegram" },
+                  { "option": "Friend / Referral" },
+                  { "option": "YouTube" },
+                  { "option": "Google Search" },
+                  { "option": "Instagram" },
+                  { "option": "Other" }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 3/4 — Background & Profile",
+          "buttonLabel": "Next →"
+        }
+      },
+      "id": "form-page3",
+      "name": "Form — Page 3: Background",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [560, 100]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "course-type",
+              "name": "courseType",
+              "value": "={{ $('Form — Page 1: Track Selection').item.json['Select Your Track'].includes('Live') ? 'live' : 'video' }}",
+              "type": "string"
+            },
+            {
+              "id": "price",
+              "name": "price",
+              "value": "={{ $('Form — Page 1: Track Selection').item.json['Select Your Track'].includes('Live') ? 49.99 : 29.99 }}",
+              "type": "number"
+            },
+            {
+              "id": "price-label",
+              "name": "priceLabel",
+              "value": "={{ $('Form — Page 1: Track Selection').item.json['Select Your Track'].includes('Live') ? '$49.99' : '$29.99' }}",
+              "type": "string"
+            },
+            {
+              "id": "track-label",
+              "name": "trackLabel",
+              "value": "={{ $('Form — Page 1: Track Selection').item.json['Select Your Track'].includes('Live') ? '🎓 Live Online Class' : '🎬 Self-Paced Video Course' }}",
+              "type": "string"
+            },
+            {
+              "id": "payment-url",
+              "name": "paymentUrl",
+              "value": "={{ $('Form — Page 1: Track Selection').item.json['Select Your Track'].includes('Live') ? $env.PAYMENT_LIVE_URL : $env.PAYMENT_VIDEO_URL }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "set-payment-data",
+      "name": "Set — Payment Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [840, 100]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "Complete Your Payment",
+        "formDescription": "={{ '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:18px 20px;margin-bottom:20px\"><strong style=\"color:#166534\">✅ Almost done! One final step.</strong><br/><span style=\"color:#15803d;font-size:13px\">Your registration details have been saved. Complete payment to confirm your seat.</span></div>' + '<div style=\"background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;text-align:center;margin-bottom:20px\">' + '<p style=\"margin:0 0 4px;color:#64748b;font-size:13px\">Your selected track</p>' + '<h3 style=\"margin:0 0 6px;color:#1e293b;font-size:18px\">' + $json.trackLabel + '</h3>' + '<p style=\"font-size:32px;font-weight:800;color:#0ea5e9;margin:0 0 4px\">' + $json.priceLabel + '</p>' + '<p style=\"color:#94a3b8;font-size:12px;margin:0\">One-time payment · No recurring charges</p>' + '</div>' + '<div style=\"text-align:center;margin-bottom:24px\">' + '<p style=\"color:#475569;font-weight:600;font-size:14px;margin:0 0 16px\">💳 Click the button below to pay securely:</p>' + '<a href=\"' + $json.paymentUrl + '\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"display:inline-block;background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:#fff;padding:16px 48px;border-radius:12px;font-weight:700;font-size:16px;text-decoration:none;box-shadow:0 4px 14px rgba(102,126,234,0.4);transition:transform 0.2s,box-shadow 0.2s\" onmouseover=\"this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 6px 20px rgba(102,126,234,0.5)\'\" onmouseout=\"this.style.transform=\'translateY(0)\';this.style.boxShadow=\'0 4px 14px rgba(102,126,234,0.4)\'\">' + '🔒 Pay ' + $json.priceLabel + ' Now' + '</a>' + '<p style=\"color:#94a3b8;font-size:12px;margin:14px 0 0\">Secure payment via ABA · Wing · Pi Pay · True Money</p>' + '</div>' + '<div style=\"background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:14px 16px;margin-bottom:20px\">' + '<p style=\"color:#92400e;font-size:13px;margin:0\">⚠️ <strong>Important:</strong> After completing payment, return here to upload your receipt screenshot.</p>' + '</div>' + '<p style=\"color:#64748b;font-size:13px;margin:0\">⬇️ Upload your <strong>payment screenshot</strong> below:</p>' }}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Payment Screenshot",
+              "fieldType": "file",
+              "requiredField": true,
+              "acceptFileTypes": ".jpg,.jpeg,.png,.pdf",
+              "multipleFiles": false
+            },
+            {
+              "fieldLabel": "Transaction ID / Reference Number (optional)",
+              "fieldType": "text",
+              "requiredField": false,
+              "fieldOptions": {
+                "placeholder": "e.g. TXN-2026XXXX or last 6 digits"
+              }
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Step 4/4 — Payment",
+          "buttonLabel": "Submit Registration 🎉"
+        }
+      },
+      "id": "form-page4",
+      "name": "Form — Page 4: Payment",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1120, 100]
+    },
+
+    {
+      "parameters": {
+        "operation": "upload",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GDRIVE_FOLDER_ID }}"
+        },
+        "name": "=payment_{{ $('Form — Page 2: Personal Info').item.json['Email Address'].replace('@', '_at_') }}_{{ Date.now() }}.{{ $binary.data.fileExtension }}",
+        "options": {
+          "googleFileConvert": false
+        }
+      },
+      "id": "gdrive-upload",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1400, 100],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_GDRIVE_CREDENTIAL_ID",
+          "name": "Google Drive account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "operation": "insertOne",
+        "collection": "registrations",
+        "documentJson": "={{ {\n  email: $('Form — Page 2: Personal Info').item.json['Email Address'],\n  courseType: $('Set — Payment Data').item.json.courseType,\n  price: $('Set — Payment Data').item.json.price,\n  \n  firstNameEn: $('Form — Page 2: Personal Info').item.json['First Name (English)'],\n  lastNameEn: $('Form — Page 2: Personal Info').item.json['Last Name (English)'],\n  firstNameKh: $('Form — Page 2: Personal Info').item.json['ឈ្មោះ (First Name - Khmer)'],\n  lastNameKh: $('Form — Page 2: Personal Info').item.json['នាមត្រកូល (Last Name - Khmer)'],\n  \n  academicYear: $('Form — Page 3: Background').item.json['Current Academic Year'],\n  major: $('Form — Page 3: Background').item.json['Major / Field of Study'],\n  institution: $('Form — Page 3: Background').item.json['Institution / University (optional)'] || '',\n  \n  githubUsername: $('Form — Page 3: Background').item.json['GitHub Username'],\n  experienceLevel: $('Form — Page 3: Background').item.json['Programming Experience Level'],\n  expectations: $('Form — Page 3: Background').item.json['What are your expectations from this bootcamp?'],\n  referralSource: $('Form — Page 3: Background').item.json['How did you hear about this bootcamp?'],\n  \n  transactionId: $('Form — Page 4: Payment').item.json['Transaction ID / Reference Number (optional)'] || '',\n  paymentScreenshotUrl: $json.webViewLink,\n  paymentScreenshotFileId: $json.id,\n  \n  paymentStatus: 'pending',\n  submittedAt: new Date(),\n  verifiedAt: null,\n  telegramNotificationSent: false\n} }}"
+      },
+      "id": "mongo-save-reg",
+      "name": "MongoDB — Save Registration",
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.1,
+      "position": [1680, 100],
+      "credentials": {
+        "mongoDb": {
+          "id": "REPLACE_WITH_YOUR_MONGO_CREDENTIAL_ID",
+          "name": "MongoDB account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_ADMIN_CHAT_ID }}",
+        "text": "=💰 *New Bootcamp Registration*\n━━━━━━━━━━━━━━━━━━━\n👤 *Name:* {{ $('Form — Page 2: Personal Info').item.json['First Name (English)'] }} {{ $('Form — Page 2: Personal Info').item.json['Last Name (English)'] }}\n📧 *Email:* {{ $('Form — Page 2: Personal Info').item.json['Email Address'] }}\n📚 *Track:* {{ $('Set — Payment Data').item.json.trackLabel }} ({{ $('Set — Payment Data').item.json.priceLabel }})\n\n🎓 *Background:*\n• {{ $('Form — Page 3: Background').item.json['Current Academic Year'] }}\n• {{ $('Form — Page 3: Background').item.json['Major / Field of Study'] }}\n• GitHub: @{{ $('Form — Page 3: Background').item.json['GitHub Username'] }}\n\n📎 *Payment Screenshot:*\n{{ $('Upload to Google Drive').item.json.webViewLink }}\n\n💳 *Transaction ID:* {{ $('Form — Page 4: Payment').item.json['Transaction ID / Reference Number (optional)'] || 'N/A' }}\n\n⏰ *Submitted:* {{ new Date().toLocaleString('en-US', { timeZone: 'Asia/Phnom_Penh' }) }}\n\n🔗 *Registration ID:* `{{ $('MongoDB — Save Registration').item.json.insertedId }}`",
+        "additionalFields": {
+          "parseMode": "Markdown"
+        }
+      },
+      "id": "telegram-admin",
+      "name": "Telegram — Notify Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1960, 100],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "course-type-check",
+              "leftValue": "={{ $('Set — Payment Data').item.json.courseType }}",
+              "rightValue": "live",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-live-class",
+      "name": "IF — Live Class?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2240, 100]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "telegram-link",
+              "name": "telegramGroupLink",
+              "value": "={{ $env.TELEGRAM_LIVE_GROUP }}",
+              "type": "string"
+            },
+            {
+              "id": "start-date",
+              "name": "classStartDate",
+              "value": "July 15, 2026",
+              "type": "string"
+            },
+            {
+              "id": "schedule",
+              "name": "schedule",
+              "value": "Every Tuesday & Thursday · 7:00-9:00 PM (GMT+7)",
+              "type": "string"
+            },
+            {
+              "id": "track-label",
+              "name": "trackLabel",
+              "value": "🎓 Live Online Class",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "set-live-data",
+      "name": "Set — Live Class Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2520, -20]
+    },
+
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "telegram-link",
+              "name": "telegramGroupLink",
+              "value": "={{ $env.TELEGRAM_VIDEO_GROUP }}",
+              "type": "string"
+            },
+            {
+              "id": "start-date",
+              "name": "classStartDate",
+              "value": "Immediate — start learning today!",
+              "type": "string"
+            },
+            {
+              "id": "schedule",
+              "name": "schedule",
+              "value": "Self-paced · Lifetime access",
+              "type": "string"
+            },
+            {
+              "id": "track-label",
+              "name": "trackLabel",
+              "value": "🎬 Self-Paced Video Course",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "set-video-data",
+      "name": "Set — Video Course Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2520, 220]
+    },
+
+    {
+      "parameters": {
+        "mode": "chooseBranch",
+        "output": "input1"
+      },
+      "id": "merge-course-info",
+      "name": "Merge — Course Info",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2800, 100]
+    },
+
+    {
+      "parameters": {
+        "formTitle": "🎉 Registration Complete!",
+        "formDescription": "={{ '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:24px;text-align:center;margin-bottom:20px\"><div style=\"font-size:56px;margin-bottom:10px\">🎉</div><h2 style=\"color:#166534;margin:0 0 8px\">Thank You, ' + $('Form — Page 2: Personal Info').item.json['First Name (English)'] + '!</h2><p style=\"color:#15803d;margin:0;font-size:14px\">Your registration is received. We'll verify your payment within <strong>24 hours</strong>.</p></div><div style=\"background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;margin-bottom:16px\"><h3 style=\"color:#1e293b;margin:0 0 14px;font-size:15px\">📋 Summary</h3><table style=\"width:100%;font-size:14px\"><tr style=\"border-bottom:1px solid #f1f5f9\"><td style=\"padding:9px 0;color:#64748b\">Track</td><td style=\"padding:9px 0;font-weight:600;color:#1e293b\">' + $json.trackLabel + '</td></tr><tr style=\"border-bottom:1px solid #f1f5f9\"><td style=\"padding:9px 0;color:#64748b\">Start Date</td><td style=\"padding:9px 0;font-weight:600;color:#166534\">' + $json.classStartDate + '</td></tr><tr><td style=\"padding:9px 0;color:#64748b\">Schedule</td><td style=\"padding:9px 0;color:#1e293b\">' + $json.schedule + '</td></tr></table></div><div style=\"background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:20px;margin-bottom:16px\"><h3 style=\"color:#1e40af;margin:0 0 10px;font-size:15px\">📱 Join Telegram Community</h3><p style=\"color:#3b5a9a;margin:0 0 14px;font-size:13px\">Once your payment is verified, join our community group:</p><a href=\"' + $json.telegramGroupLink + '\" target=\"_blank\" style=\"display:inline-block;padding:12px 28px;background:#0088cc;color:#fff;border-radius:8px;text-decoration:none;font-weight:700\">Join Group →</a></div><div style=\"background:#fef9e7;border:1px solid #fcd34d;border-radius:8px;padding:14px 16px\"><p style=\"color:#92400e;margin:0;font-size:13px\">⏳ <strong>Next steps:</strong> Our admin will verify your payment and send you a confirmation message on Telegram. Check your email <strong>' + $('Form — Page 2: Personal Info').item.json['Email Address'] + '</strong> for updates.</p></div>' }}",
+        "formFields": { "values": [] },
+        "options": {
+          "formTitle": "Registration Complete ✓",
+          "buttonLabel": "Done ✓"
+        }
+      },
+      "id": "form-success",
+      "name": "Form — Success Page",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [3080, 100]
+    }
+  ],
+
+  "connections": {
+    "Form — Page 1: Track Selection": {
+      "main": [
+        [{ "node": "Form — Page 2: Personal Info", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 2: Personal Info": {
+      "main": [
+        [{ "node": "Form — Page 3: Background", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 3: Background": {
+      "main": [[{ "node": "Set — Payment Data", "type": "main", "index": 0 }]]
+    },
+    "Set — Payment Data": {
+      "main": [
+        [{ "node": "Form — Page 4: Payment", "type": "main", "index": 0 }]
+      ]
+    },
+    "Form — Page 4: Payment": {
+      "main": [
+        [{ "node": "Upload to Google Drive", "type": "main", "index": 0 }]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [{ "node": "MongoDB — Save Registration", "type": "main", "index": 0 }]
+      ]
+    },
+    "MongoDB — Save Registration": {
+      "main": [
+        [{ "node": "Telegram — Notify Admin", "type": "main", "index": 0 }]
+      ]
+    },
+    "Telegram — Notify Admin": {
+      "main": [[{ "node": "IF — Live Class?", "type": "main", "index": 0 }]]
+    },
+    "IF — Live Class?": {
+      "main": [
+        [{ "node": "Set — Live Class Info", "type": "main", "index": 0 }],
+        [{ "node": "Set — Video Course Info", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set — Live Class Info": {
+      "main": [[{ "node": "Merge — Course Info", "type": "main", "index": 0 }]]
+    },
+    "Set — Video Course Info": {
+      "main": [[{ "node": "Merge — Course Info", "type": "main", "index": 1 }]]
+    },
+    "Merge — Course Info": {
+      "main": [[{ "node": "Form — Success Page", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "REPLACE_WITH_YOUR_N8N_INSTANCE_ID"
+  },
+  "id": "simple-bootcamp-registration",
+  "tags": [
+    { "id": "tag-01", "name": "bootcamp" },
+    { "id": "tag-02", "name": "simple" },
+    { "id": "tag-03", "name": "no-auth" }
+  ]
+}
