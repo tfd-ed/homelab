@@ -6,11 +6,11 @@ Note that this project is not intended for heavy production workloads. In Cambod
 
 ## YouTube Video
 I intended to release YouTube videos docummenting this journey. 
-- [1st Video: ខ្ញុំលែងប្រើ Cloud ហើយធ្វើ HomeLab Server មួយខ្លួនឯង | Moving from Cloud to Home Lab](https://youtu.be/VtUXaHL9B6Q?si=FgUlQjMOOWyEZPOM)
-- [2nd Video: ហេតុអ្វីខ្ញុំប្រើ Self-Hosted Runner ដើម្បីដាក់ Project លើ HomeLab ](https://www.youtube.com/watch?v=YuvwrEfzgvs)
-- [3rd Video: ចំណាយ $0 លើ ChatGPT ! បង្កើត AI Agent ប្រើលើ Server ខ្លួនឯង (Local LLM) ជួយខ្ញុំគ្រប់គ្រង Server](https://www.youtube.com/watch?v=tesGxIsHfMA)
-- [4th Video: ពេល Server ស៊ី RAM ដល់ទៅ 30GB ទើបដឹងខ្លួនថាត្រូវប្តូរមកប្រើ K3s វិញ](https://youtu.be/tJv-8EzpKKE)
-- [5th Video: សរសេរ Code រួចកុំអាលអរ! នេះជាការងារពិតក្រោយពេល System ដើរ | ការ Monitor ក្នុង Production](https://youtu.be/-QrCHdYMvpQ)
+1. [ខ្ញុំលែងប្រើ Cloud ហើយធ្វើ HomeLab Server មួយខ្លួនឯង | Moving from Cloud to Home Lab](https://youtu.be/VtUXaHL9B6Q?si=FgUlQjMOOWyEZPOM)
+2. [ហេតុអ្វីខ្ញុំប្រើ Self-Hosted Runner ដើម្បីដាក់ Project លើ HomeLab ](https://www.youtube.com/watch?v=YuvwrEfzgvs)
+3. [ចំណាយ $0 លើ ChatGPT ! បង្កើត AI Agent ប្រើលើ Server ខ្លួនឯង (Local LLM) ជួយខ្ញុំគ្រប់គ្រង Server](https://www.youtube.com/watch?v=tesGxIsHfMA)
+4. [ពេល Server ស៊ី RAM ដល់ទៅ 30GB ទើបដឹងខ្លួនថាត្រូវប្តូរមកប្រើ K3s វិញ](https://youtu.be/tJv-8EzpKKE)
+5. [សរសេរ Code រួចកុំអាលអរ! នេះជាការងារពិតក្រោយពេល System ដើរ | ការ Monitor ក្នុង Production](https://youtu.be/-QrCHdYMvpQ)
 
 ## Architecture Overview
 <img src="diagram/homelab-architecture-logos.png" alt="Infrastructure Architecture Diagram" width="800" align="center"/>
