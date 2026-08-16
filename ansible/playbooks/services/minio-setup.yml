@@ -1,0 +1,115 @@
+---
+- name: Setup MinIO Object Storage Server
+  hosts: minio
+  become: yes
+  vars:
+    minio_version: "latest"
+    minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | default('minioadmin', true) }}"
+    minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | default('changeme_minio', true) }}"
+    minio_server_url: "http://{{ ansible_host }}:9000"
+    minio_console_url: "http://{{ ansible_host }}:9001"
+    minio_data_dir: "/opt/minio/data"
+    minio_config_dir: "/opt/minio/config"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Create MinIO directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ minio_data_dir }}"
+        - "{{ minio_config_dir }}"
+
+    - name: Deploy MinIO container
+      docker_container:
+        name: minio
+        image: "minio/minio:{{ minio_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "9000:9000" # API port
+          - "9001:9001" # Console port
+        env:
+          MINIO_ROOT_USER: "{{ minio_root_user }}"
+          MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
+          MINIO_BROWSER_REDIRECT_URL: "{{ minio_console_url }}"
+        volumes:
+          - "{{ minio_data_dir }}:/data"
+          - "{{ minio_config_dir }}:/root/.minio"
+        command: server /data --console-address ":9001"
+        healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+          interval: 30s
+          timeout: 20s
+          retries: 3
+          start_period: 3m
+
+    - name: Wait for MinIO to be ready
+      uri:
+        url: "{{ minio_server_url }}/minio/health/live"
+        status_code: 200
+      register: result
+      until: result.status == 200
+      retries: 10
+      delay: 5
+
+    - name: Install MinIO Client (mc)
+      get_url:
+        url: https://dl.min.io/client/mc/release/linux-amd64/mc
+        dest: /usr/local/bin/mc
+        mode: "0755"
+
+    - name: Configure MinIO client alias
+      shell: |
+        /usr/local/bin/mc alias set local {{ minio_server_url }} {{ minio_root_user }} {{ minio_root_password }}
+      changed_when: true
+
+    - name: Display MinIO access information
+      debug:
+        msg:
+          - "MinIO has been successfully deployed!"
+          - "API Endpoint: {{ minio_server_url }}"
+          - "Console URL: {{ minio_console_url }}"
+          - "Access Key: {{ minio_root_user }}"
+          - "Secret Key: {{ minio_root_password }}"
+          - ""
+          - "To create a bucket, run:"
+          - "  mc mb local/my-bucket"
+          - ""
+          - "To list buckets, run:"
+          - "  mc ls local"
+
+    - name: Create example bucket (optional)
+      shell: |
+        /usr/local/bin/mc mb local/example-bucket --ignore-existing
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Set example bucket policy to public (optional)
+      shell: |
+        /usr/local/bin/mc anonymous set download local/example-bucket
+      changed_when: false
+      ignore_errors: yes
+
+  handlers:
+    - name: restart minio
+      docker_container:
+        name: minio
+        state: started
+        restart: yes

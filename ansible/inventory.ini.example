@@ -6,6 +6,7 @@ k8s-master ansible_host=192.168.100.201
 k8s-worker-1 ansible_host=192.168.100.202
 k8s-worker-2 ansible_host=192.168.100.203 
 database-vm ansible_host=192.168.100.205
+minio-vm ansible_host=192.168.100.206
 gateway-vm ansible_host=192.168.100.210
 monitoring ansible_host=192.168.100.220
 n8n ansible_host=192.168.100.230
@@ -50,6 +51,15 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 ci-cd ansible_host=192.168.100.240
 
 [ci-cd:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=/path/to/your/key
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+
+[minio]
+minio-vm ansible_host=192.168.100.206
+
+[minio:vars]
 ansible_user=ubuntu
 ansible_ssh_private_key_file=/path/to/your/key
 ansible_python_interpreter=/usr/bin/python3

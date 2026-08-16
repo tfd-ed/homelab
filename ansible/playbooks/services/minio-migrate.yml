@@ -1,0 +1,159 @@
+---
+- name: Migrate MinIO data from database VM to dedicated MinIO VM
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    source_host: "192.168.100.205"
+    target_host: "192.168.100.206"
+    minio_root_user: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_USER') | default('minioadmin', true) }}"
+    minio_root_password: "{{ lookup('ansible.builtin.env', 'MINIO_ROOT_PASSWORD') | default('changeme_minio', true) }}"
+    source_url: "http://{{ source_host }}:9000"
+    target_url: "http://{{ target_host }}:9000"
+    ssh_key: "/Users/kimang/Documents/ProgrammingProjects/homelab-journey/ssh-keys/vm-key"
+
+  tasks:
+    - name: Display migration information
+      debug:
+        msg:
+          - "========================================="
+          - "MinIO Data Migration"
+          - "========================================="
+          - "Source: {{ source_url }} (database-vm)"
+          - "Target: {{ target_url }} (minio-vm)"
+          - "========================================="
+          - ""
+
+    - name: Check if mc (MinIO client) is installed locally
+      command: which mc
+      register: mc_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Ensure mc is available
+      block:
+        - name: Create local bin directory
+          file:
+            path: "{{ ansible_env.HOME }}/.local/bin"
+            state: directory
+            mode: "0755"
+
+        - name: Download MinIO client for macOS
+          get_url:
+            url: https://dl.min.io/client/mc/release/darwin-amd64/mc
+            dest: "{{ ansible_env.HOME }}/.local/bin/mc"
+            mode: "0755"
+          when: ansible_system == "Darwin"
+
+        - name: Download MinIO client for Linux
+          get_url:
+            url: https://dl.min.io/client/mc/release/linux-amd64/mc
+            dest: "{{ ansible_env.HOME }}/.local/bin/mc"
+            mode: "0755"
+          when: ansible_system == "Linux"
+
+        - name: Set mc path
+          set_fact:
+            mc_bin: "{{ ansible_env.HOME }}/.local/bin/mc"
+      when: mc_check.rc != 0
+
+    - name: Set mc path if already installed
+      set_fact:
+        mc_bin: "mc"
+      when: mc_check.rc == 0
+
+    - name: Configure source MinIO alias
+      shell: |
+        {{ mc_bin }} alias set source-minio {{ source_url }} {{ minio_root_user }} {{ minio_root_password }}
+      changed_when: true
+
+    - name: Configure target MinIO alias
+      shell: |
+        {{ mc_bin }} alias set target-minio {{ target_url }} {{ minio_root_user }} {{ minio_root_password }}
+      changed_when: true
+
+    - name: List buckets on source MinIO
+      shell: "{{ mc_bin }} ls source-minio"
+      register: source_buckets
+      changed_when: false
+
+    - name: Display source buckets
+      debug:
+        msg: "{{ source_buckets.stdout_lines }}"
+
+    - name: Get list of bucket names
+      shell: "{{ mc_bin }} ls source-minio | awk '{print $NF}' | sed 's#/##'"
+      register: bucket_names
+      changed_when: false
+
+    - name: Display buckets to be migrated
+      debug:
+        msg:
+          - "Buckets to migrate:"
+          - "{{ bucket_names.stdout_lines }}"
+
+    - name: Confirm migration
+      pause:
+        prompt: "Do you want to proceed with migration? Press Enter to continue or Ctrl+C to cancel"
+
+    - name: Create buckets on target MinIO
+      shell: |
+        {{ mc_bin }} mb target-minio/{{ item }} --ignore-existing
+      loop: "{{ bucket_names.stdout_lines }}"
+      when: bucket_names.stdout_lines | length > 0
+      register: create_result
+
+    - name: Mirror each bucket to target MinIO
+      shell: |
+        {{ mc_bin }} mirror source-minio/{{ item }} target-minio/{{ item }}
+      loop: "{{ bucket_names.stdout_lines }}"
+      when: bucket_names.stdout_lines | length > 0
+      register: mirror_result
+
+    - name: Display migration results
+      debug:
+        msg:
+          - "========================================="
+          - "Migration Complete!"
+          - "========================================="
+          - "Migrated {{ bucket_names.stdout_lines | length }} bucket(s)"
+          - ""
+          - "Verify migration:"
+          - "  {{ mc_bin }} ls target-minio"
+          - ""
+          - "Compare buckets:"
+          - "  {{ mc_bin }} diff source-minio/BUCKET target-minio/BUCKET"
+
+    - name: List buckets on target MinIO
+      shell: "{{ mc_bin }} ls target-minio"
+      register: target_buckets
+      changed_when: false
+
+    - name: Display target buckets
+      debug:
+        msg:
+          - "Target MinIO buckets:"
+          - "{{ target_buckets.stdout_lines }}"
+
+- name: Optional - Stop old MinIO on database VM
+  hosts: database
+  become: yes
+  tasks:
+    - name: Ask if old MinIO should be stopped
+      pause:
+        prompt: "Do you want to stop the old MinIO container on database-vm? (yes/no)"
+      register: stop_minio
+      delegate_to: localhost
+
+    - name: Stop MinIO container on database VM
+      docker_container:
+        name: minio
+        state: stopped
+      when: stop_minio.user_input | lower == 'yes'
+
+    - name: Display old MinIO status
+      debug:
+        msg:
+          - "Old MinIO container has been stopped."
+          - "Data is still preserved in /opt/databases/minio/data"
+          - "You can restart it with: docker start minio"
+      when: stop_minio.user_input | lower == 'yes'

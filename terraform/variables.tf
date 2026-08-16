@@ -66,13 +66,13 @@ variable "vlan_tag" {
 variable "vms" {
   description = "VM configurations"
   type = map(object({
-    cores  = number
-    memory = number
-    disk_size = string
-    ip_address = string
+    cores       = number
+    memory      = number
+    disk_size   = string
+    ip_address  = string
     description = string
   }))
-  
+
   default = {
     k8s-master = {
       cores       = 2
@@ -136,6 +136,13 @@ variable "vms" {
       disk_size   = "20G"
       ip_address  = "192.168.100.250"
       description = "AI VM - TinyLlama 1.1B via Ollama"
+    }
+    minio-vm = {
+      cores       = 2
+      memory      = 4096
+      disk_size   = "200G"
+      ip_address  = "192.168.100.206"
+      description = "MinIO Object Storage - S3-compatible storage"
     }
   }
 }

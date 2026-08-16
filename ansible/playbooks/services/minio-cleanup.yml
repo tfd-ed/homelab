@@ -1,0 +1,128 @@
+---
+- name: Cleanup MinIO from Database VM
+  hosts: database
+  become: yes
+  vars:
+    backup_dir: "/opt/databases/backups/minio-backup-{{ ansible_date_time.iso8601_basic_short }}"
+
+  tasks:
+    - name: Display cleanup information
+      debug:
+        msg:
+          - "========================================="
+          - "MinIO Cleanup on Database VM"
+          - "========================================="
+          - "This will:"
+          - "  1. Stop the MinIO container"
+          - "  2. Remove the MinIO container"
+          - "  3. Optionally backup data"
+          - "  4. Optionally remove data directory"
+          - "  5. Free up ports 9000 and 9001"
+          - "========================================="
+          - ""
+
+    - name: Check if MinIO container exists
+      shell: docker ps -a --filter "name=minio" --format "{{ '{{' }}.Names{{ '}}' }}"
+      register: minio_container
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Display MinIO container status
+      debug:
+        msg: "MinIO container found: {{ minio_container.stdout }}"
+      when: minio_container.stdout != ""
+
+    - name: Stop MinIO container
+      docker_container:
+        name: minio
+        state: stopped
+      when: minio_container.stdout != ""
+      register: stop_result
+
+    - name: Display stop result
+      debug:
+        msg: "MinIO container stopped successfully"
+      when: stop_result is changed
+
+    - name: Get MinIO data directory size
+      shell: du -sh /opt/databases/minio/data 2>/dev/null || echo "0B"
+      register: data_size
+      changed_when: false
+
+    - name: Display data size
+      debug:
+        msg: "MinIO data directory size: {{ data_size.stdout }}"
+
+    - name: Ask if data should be backed up before removal
+      pause:
+        prompt: "Do you want to backup MinIO data before cleanup? (yes/no)"
+      register: backup_choice
+      delegate_to: localhost
+
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: "0755"
+      when: backup_choice.user_input | lower == 'yes'
+
+    - name: Backup MinIO data
+      shell: |
+        tar -czf {{ backup_dir }}/minio-data.tar.gz -C /opt/databases/minio data
+      when: backup_choice.user_input | lower == 'yes'
+      register: backup_result
+
+    - name: Display backup location
+      debug:
+        msg: "Backup created at: {{ backup_dir }}/minio-data.tar.gz"
+      when: backup_choice.user_input | lower == 'yes'
+
+    - name: Remove MinIO container
+      docker_container:
+        name: minio
+        state: absent
+      when: minio_container.stdout != ""
+
+    - name: Ask if data directory should be removed
+      pause:
+        prompt: "Do you want to remove MinIO data directory? (yes/no - WARNING: This will delete all data unless backed up)"
+      register: remove_choice
+      delegate_to: localhost
+
+    - name: Remove MinIO data directory
+      file:
+        path: /opt/databases/minio
+        state: absent
+      when: remove_choice.user_input | lower == 'yes'
+
+    - name: Display freed resources
+      debug:
+        msg:
+          - "========================================="
+          - "Cleanup Complete!"
+          - "========================================="
+          - "Resources freed:"
+          - "  - Ports: 9000, 9001"
+          - "  - Disk space: {{ data_size.stdout if remove_choice.user_input | lower == 'yes' else '0B (data kept)' }}"
+          - "  - Container: minio"
+          - ""
+          - "{% if backup_choice.user_input | lower == 'yes' %}Backup location: {{ backup_dir }}/minio-data.tar.gz{% endif %}"
+          - "{% if remove_choice.user_input | lower != 'yes' %}Data still in: /opt/databases/minio/data{% endif %}"
+
+    - name: List remaining containers
+      shell: docker ps --format "table {{ '{{' }}.Names{{ '}}' }}\t{{ '{{' }}.Image{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}"
+      register: containers
+      changed_when: false
+
+    - name: Display remaining containers
+      debug:
+        msg: "{{ containers.stdout_lines }}"
+
+    - name: Check disk usage
+      shell: df -h /opt/databases
+      register: disk_usage
+      changed_when: false
+
+    - name: Display disk usage
+      debug:
+        msg: "{{ disk_usage.stdout_lines }}"
