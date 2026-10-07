@@ -32,6 +32,10 @@ scrape_configs:
     static_configs:
       - targets: ['loki:3100']
 
+  - job_name: 'tempo'
+    static_configs:
+      - targets: ['tempo:3200']
+
   # Alloy log shippers: their own metrics feed the "log shipping stalled" alert.
   - job_name: 'alloy-k8s'
     static_configs:
@@ -76,6 +80,36 @@ scrape_configs:
       - targets: ['192.168.100.205:9187']
         labels:
           instance: 'database-vm'
+
+  # MongoDB and Redis (exporters deployed by database-exporters-setup.yml)
+  - job_name: 'mongodb'
+    static_configs:
+      - targets: ['{{ mongodb_exporter_target }}']
+        labels:
+          instance: 'database-vm'
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['{{ redis_exporter_target }}']
+        labels:
+          instance: 'database-vm'
+
+{% if minio_metrics_token | length > 0 %}
+  # MinIO's own cluster metrics. The bearer token is read from a file (docs/monitoring-phase3.md).
+  - job_name: 'minio'
+    metrics_path: /minio/v2/metrics/cluster
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/minio_token
+    static_configs:
+      - targets: ['{{ minio_metrics_target }}']
+        labels:
+          instance: 'minio-vm'
+
+{% endif %}
+  # Application metrics (tfd-api, tfd-bot, tfd-blog) and the trace collector are NOT listed here:
+  # Alloy in K3s scrapes the annotated pods and writes them to this Prometheus (remote write),
+  # with the labels job=<app>, env=<namespace>, pod=<pod>. Tempo adds the traces_* series.
 
   # Docker Registry debug/metrics endpoint (port 5001)
   - job_name: 'docker-registry'

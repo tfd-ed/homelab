@@ -27,6 +27,7 @@
     alertmanager_version: "v0.28.1"      # telegram_configs with bot_token_file / message_thread_id
     blackbox_version: "v0.25.0"
     loki_version: "3.4.2"
+    tempo_version: "2.8.2"               # single binary; traces kept 7 days (tempo-config.yml)
     grafana_version: "10.2.3"
     prometheus_port: 9090
     grafana_port: 3000
@@ -55,6 +56,14 @@
       - 192.168.100.203:12345
     alloy_gateway_targets:
       - 192.168.100.210:12345
+
+    # Datastore exporters on database-vm (playbooks/services/database-exporters-setup.yml).
+    mongodb_exporter_target: "192.168.100.205:9216"
+    redis_exporter_target: "192.168.100.205:9121"
+    # MinIO's own metrics. Needs a bearer token (docs/monitoring-phase3.md): without
+    # MINIO_PROMETHEUS_TOKEN in the environment the MinIO job is left out.
+    minio_metrics_target: "192.168.100.206:9000"
+    minio_metrics_token: "{{ lookup('ansible.builtin.env', 'MINIO_PROMETHEUS_TOKEN') }}"
 
     # kube-state-metrics NodePort (kubernetes/kube-state-metrics-setup.yml). One node only.
     kube_state_metrics_target: "192.168.100.202:30686"
@@ -141,6 +150,8 @@
         - "{{ monitoring_dir }}/alertmanager/templates"
         - "{{ monitoring_dir }}/blackbox"
         - "{{ monitoring_dir }}/loki"
+        - "{{ monitoring_dir }}/tempo"
+        - "{{ monitoring_dir }}/prometheus/secrets"
         - "{{ monitoring_dir }}/grafana"
         - "{{ monitoring_dir }}/grafana/data"
         - "{{ monitoring_dir }}/grafana/provisioning"
@@ -212,6 +223,38 @@
         dest: "{{ monitoring_dir }}/loki/loki-config.yml"
         mode: "0644"
 
+    # ---- Tempo -------------------------------------------------------------------------------
+    - name: Create Tempo data directory (the Tempo image runs as uid 10001)
+      file:
+        path: "{{ monitoring_dir }}/tempo/data"
+        state: directory
+        owner: "10001"
+        group: "10001"
+        mode: "0755"
+
+    - name: Install Tempo configuration
+      copy:
+        src: "{{ playbook_dir }}/files/monitoring/tempo/tempo-config.yml"
+        dest: "{{ monitoring_dir }}/tempo/tempo-config.yml"
+        mode: "0644"
+
+    # ---- MinIO metrics token (optional) --------------------------------------------------------
+    - name: Write the MinIO metrics bearer token (read from a file, never from the config)
+      copy:
+        content: "{{ minio_metrics_token }}"
+        dest: "{{ monitoring_dir }}/prometheus/secrets/minio_token"
+        owner: "65534"
+        group: "65534"
+        mode: "0400"
+      when: minio_metrics_token | length > 0
+      no_log: true
+
+    - name: Remove a stale MinIO metrics token when none is configured
+      file:
+        path: "{{ monitoring_dir }}/prometheus/secrets/minio_token"
+        state: absent
+      when: minio_metrics_token | length == 0
+
     # ---- blackbox-exporter -------------------------------------------------------------------
     - name: Install blackbox-exporter modules
       copy:
@@ -247,6 +290,11 @@
               url: http://prometheus:9090
               isDefault: true
               editable: true
+              jsonData:
+                # The exemplar on a slow-request latency point links to its trace in Tempo.
+                exemplarTraceIdDestinations:
+                  - name: traceId
+                    datasourceUid: tempo
             - name: Loki
               type: loki
               uid: loki
@@ -262,6 +310,40 @@
                     url: '{env=~".+"} |= "$${__value.raw}"'
                     datasourceUid: loki
                     urlDisplayLabel: All lines for this request
+                  # ... and every traceId into a link that opens the trace in Tempo.
+                  - name: traceId
+                    matcherRegex: '"traceId":"([0-9a-f]{32})"'
+                    url: '$${__value.raw}'
+                    datasourceUid: tempo
+                    urlDisplayLabel: Open the trace
+            - name: Tempo
+              type: tempo
+              uid: tempo
+              access: proxy
+              url: http://tempo:3200
+              editable: true
+              jsonData:
+                # Trace -> logs: the lines of the same trace id around the span's time.
+                tracesToLogsV2:
+                  datasourceUid: loki
+                  spanStartTimeShift: '-5m'
+                  spanEndTimeShift: '5m'
+                  filterByTraceID: false
+                  filterBySpanID: false
+                  customQuery: true
+                  query: '{env=~".+"} |= "$${__trace.traceId}"'
+                # Trace -> metrics: request rate and latency of the span's service.
+                tracesToMetrics:
+                  datasourceUid: prometheus
+                  spanStartTimeShift: '-5m'
+                  spanEndTimeShift: '5m'
+                  queries:
+                    - name: Request rate
+                      query: 'sum(rate(http_server_duration_seconds_count{app="$${__span.tags["service.name"]}"}[1m]))'
+                serviceMap:
+                  datasourceUid: prometheus
+                nodeGraph:
+                  enabled: true
             - name: Alertmanager
               type: alertmanager
               access: proxy
@@ -289,11 +371,15 @@
                 path: /etc/grafana/provisioning/dashboards
         mode: "0644"
 
-    - name: Install the Requests dashboard
+    - name: Install the dashboards
       copy:
-        src: "{{ playbook_dir }}/files/monitoring/grafana/dashboards/tfd-requests.json"
-        dest: "{{ monitoring_dir }}/grafana/provisioning/dashboards/tfd-requests.json"
+        src: "{{ playbook_dir }}/files/monitoring/grafana/dashboards/{{ item }}"
+        dest: "{{ monitoring_dir }}/grafana/provisioning/dashboards/{{ item }}"
         mode: "0644"
+      loop:
+        - tfd-requests.json
+        - tfd-services.json
+        - tfd-datastores.json
 
     - name: Write Grafana environment file (admin password lives here, not in docker-compose.yml)
       copy:
@@ -326,11 +412,15 @@
                 - '--web.console.libraries=/usr/share/prometheus/console_libraries'
                 - '--web.console.templates=/usr/share/prometheus/consoles'
                 - '--web.enable-lifecycle'
+                # Phase 3: Alloy (K3s) and Tempo write metrics here; slow-request trace ids are kept as exemplars.
+                - '--web.enable-remote-write-receiver'
+                - '--enable-feature=exemplar-storage'
               ports:
                 - "{{ prometheus_port }}:9090"
               volumes:
                 - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
                 - ./prometheus/alerts:/etc/prometheus/alerts:ro
+                - ./prometheus/secrets:/etc/prometheus/secrets:ro
                 - ./prometheus/data:/prometheus
               networks:
                 - monitoring
@@ -385,6 +475,26 @@
               volumes:
                 - ./loki/loki-config.yml:/etc/loki/config.yml:ro
                 - ./loki/data:/loki
+              networks:
+                - monitoring
+
+            tempo:
+              image: grafana/tempo:{{ tempo_version }}
+              container_name: tempo
+              restart: unless-stopped
+              command:
+                - '-config.file=/etc/tempo/config.yml'
+              environment:
+                # Soft memory ceiling: the VM has 6 GB shared with Prometheus, Loki and Grafana.
+                - GOMEMLIMIT=512MiB
+              ports:
+                # LAN: the trace collector in K3s sends OTLP/gRPC to 4317 and the playbooks check 3200.
+                # No auth, keep both on the LAN; Grafana reads through the compose network.
+                - "4317:4317"
+                - "3200:3200"
+              volumes:
+                - ./tempo/tempo-config.yml:/etc/tempo/config.yml:ro
+                - ./tempo/data:/var/tempo
               networks:
                 - monitoring
 
@@ -483,6 +593,14 @@
         -config.file=/etc/loki/config.yml -verify-config
       changed_when: false
 
+    - name: Validate Tempo configuration
+      command: >-
+        docker run --rm
+        -v {{ monitoring_dir }}/tempo/tempo-config.yml:/etc/tempo/config.yml:ro
+        grafana/tempo:{{ tempo_version }}
+        -config.file=/etc/tempo/config.yml -config.verify=true
+      changed_when: false
+
     - name: Validate Docker Compose file
       command: docker-compose config -q
       args:
@@ -532,6 +650,15 @@
         status_code: 200
       register: loki_status
       until: loki_status.status == 200
+      retries: 20
+      delay: 6
+
+    - name: Wait for Tempo to be ready
+      uri:
+        url: "http://localhost:3200/ready"
+        status_code: 200
+      register: tempo_status
+      until: tempo_status.status == 200
       retries: 20
       delay: 6
 
@@ -625,6 +752,7 @@
           - "Prometheus:    http://192.168.100.220:{{ prometheus_port }}  (targets: /targets, rules: /rules, alerts: /alerts)"
           - "Alertmanager:  http://127.0.0.1:9093 on the VM (loopback only; reach it through Grafana)"
           - "Loki:          http://192.168.100.220:3100 (LAN; ingestion by Alloy, query through Grafana)"
+          - "Tempo:         http://192.168.100.220:3200 and OTLP gRPC :4317 (LAN; fed by the alloy-traces collector, query through Grafana)"
           - "Grafana:       http://192.168.100.220:{{ grafana_port }} and {{ grafana_root_url }} once tfdevs-infra is applied"
           - "                user: admin, password: the value of GRAFANA_ADMIN_PASSWORD"
           - "Heartbeat:     {{ 'configured' if heartbeat_url | length > 0 else 'NOT configured, outages will be silent' }}"
@@ -635,6 +763,7 @@
           - "  3. Re-run with -e send_test_alert=true to confirm Telegram delivery"
           - "  4. docs/monitoring-phase0.md: verification steps"
           - "  5. Logs (Phase 1): playbooks/kubernetes/alloy-setup.yml, playbooks/networking/gateway-logging-setup.yml, then docs/monitoring-phase1.md"
+          - "  6. Metrics and traces (Phase 3): playbooks/services/database-exporters-setup.yml, playbooks/kubernetes/alloy-setup.yml (again), then docs/monitoring-phase3.md"
           - ""
           - "Container Status:"
           - "{{ containers_status.stdout_lines }}"
