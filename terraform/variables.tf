@@ -125,7 +125,7 @@ variable "vms" {
     }
     ci-cd = {
       cores       = 4
-      memory      = 8192
+      memory      = 10240
       disk_size   = "100G"
       ip_address  = "192.168.100.240"
       description = "CI/CD - GitHub/GitLab runner"
