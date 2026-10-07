@@ -1,0 +1,80 @@
+---
+# Deploy Grafana Alloy as a DaemonSet that ships pod logs to Loki (observability plan, Phase 1).
+#
+# Prerequisite: Loki is running on the monitoring VM (playbooks/services/monitoring-setup.yml).
+# Usage:  ansible-playbook playbooks/kubernetes/alloy-setup.yml
+- name: Deploy Grafana Alloy log shipper on the K3s cluster
+  hosts: k8s-master
+  become: yes
+  gather_facts: no
+
+  vars:
+    kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
+    alloy_version: "v1.8.1"
+    loki_push_url: "http://192.168.100.220:3100/loki/api/v1/push"
+    alloy_config_src: "{{ playbook_dir }}/../services/files/monitoring/alloy/alloy-k8s.alloy"
+    config_checksum: "{{ lookup('ansible.builtin.file', alloy_config_src) | hash('sha1') }}"
+
+  tasks:
+    - name: Wait for K3s to be ready
+      wait_for:
+        path: "{{ kubeconfig_path }}"
+        state: present
+        timeout: 60
+
+    - name: Check that Loki answers from the cluster side
+      uri:
+        url: "{{ loki_push_url | regex_replace('/loki/api/v1/push$', '/ready') }}"
+        status_code: 200
+      register: loki_ready
+      retries: 3
+      delay: 5
+      until: loki_ready.status == 200
+
+    - name: Copy the Alloy pipeline
+      copy:
+        src: "{{ alloy_config_src }}"
+        dest: /tmp/alloy-k8s.alloy
+        mode: "0644"
+
+    - name: Render the DaemonSet manifest
+      template:
+        src: "{{ playbook_dir }}/manifests/alloy-daemonset.yaml.j2"
+        dest: /tmp/alloy-daemonset.yaml
+        mode: "0644"
+
+    - name: Ensure the monitoring namespace exists
+      shell: kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Create or update the alloy-config ConfigMap
+      shell: >-
+        kubectl -n monitoring create configmap alloy-config
+        --from-file=config.alloy=/tmp/alloy-k8s.alloy
+        --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: alloy_cm
+      changed_when: "'configured' in alloy_cm.stdout or 'created' in alloy_cm.stdout"
+
+    - name: Apply the Alloy DaemonSet
+      shell: kubectl apply -f /tmp/alloy-daemonset.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: alloy_apply
+      changed_when: "'configured' in alloy_apply.stdout or 'created' in alloy_apply.stdout"
+
+    - name: Wait for the rollout
+      shell: kubectl -n monitoring rollout status daemonset/alloy --timeout=180s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Summary
+      debug:
+        msg:
+          - "Alloy runs on every worker and ships logs of the prod, dev, ingress-nginx and plausible namespaces to {{ loki_push_url }}."
+          - "Its own metrics are on hostPort 12345 of each worker (scraped as job alloy-k8s)."
+          - "Remember: the ingress JSON log format only exists once k8s/ingress-configmap.yaml from tfd-api-next has been applied."

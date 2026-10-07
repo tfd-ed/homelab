@@ -1,0 +1,120 @@
+# Grafana Alloy log shipper for the K3s workers (observability plan, Phase 1).
+# Rendered and applied by playbooks/kubernetes/alloy-setup.yml. The pipeline itself lives in the
+# ConfigMap `alloy-config`, created from services/files/monitoring/alloy/alloy-k8s.alloy.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alloy
+rules:
+  # Service discovery of pods (labels, node, uid). Log files are read from the node's disk,
+  # so no pods/log permission is needed.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alloy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: alloy
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    namespace: monitoring
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: alloy
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alloy
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alloy
+      annotations:
+        # A changed pipeline changes this value, which rolls the pods.
+        checksum/config: "{{ config_checksum }}"
+    spec:
+      serviceAccountName: alloy
+      # Control-plane node is tainted for system pods only and runs no app pods: not scheduled there.
+      containers:
+        - name: alloy
+          image: grafana/alloy:{{ alloy_version }}
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/var/lib/alloy/data
+            - --disable-reporting
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: LOKI_URL
+              value: "{{ loki_push_url }}"
+          ports:
+            - name: http
+              containerPort: 12345
+              # Prometheus on the monitoring VM scrapes Alloy's own metrics here (log-shipping alert).
+              hostPort: 12345
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 12345
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            # Pod log files on the node are root-owned.
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/alloy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+        - name: data
+          hostPath:
+            path: /var/lib/alloy
+            type: DirectoryOrCreate
+        - name: tmp
+          emptyDir: {}
