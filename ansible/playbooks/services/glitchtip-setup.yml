@@ -99,7 +99,10 @@
     glitchtip_base_url: "https://errors.tfdevs.com"
     glitchtip_from_email: "glitchtip@tfdevs.com"
     glitchtip_retention_days: "30"
-    glitchtip_registration: "{{ lookup('ansible.builtin.env', 'GLITCHTIP_REGISTRATION') | default('True', true) }}"
+    # Ansible turns the text "True" into a boolean, so compare as lower-case text and write it back
+    # in the exact spelling GlitchTip expects.
+    glitchtip_registration_raw: "{{ lookup('ansible.builtin.env', 'GLITCHTIP_REGISTRATION') | default('True', true) | string | lower }}"
+    glitchtip_registration: "{{ 'True' if glitchtip_registration_raw == 'true' else 'False' }}"
     glitchtip_email_url: "{{ lookup('ansible.builtin.env', 'GLITCHTIP_EMAIL_URL') | default('', true) }}"
     glitchtip_db_name: glitchtip_db
     glitchtip_db_user: glitchtip
@@ -113,10 +116,10 @@
         that:
           - glitchtip_db_password | length >= 12
           - glitchtip_secret_key | length >= 32
-          - glitchtip_registration in ['True', 'False']
+          - glitchtip_registration_raw in ['true', 'false']
         fail_msg: >-
           Set GLITCHTIP_DB_PASSWORD (12+ chars) and GLITCHTIP_SECRET_KEY (32+ chars, openssl rand -hex 32);
-          GLITCHTIP_REGISTRATION must be True or False.
+          GLITCHTIP_REGISTRATION must be true or false (any capitalisation), or unset.
 
     - name: Wait for K3s to be ready
       wait_for:
