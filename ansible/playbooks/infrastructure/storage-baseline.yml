@@ -1,0 +1,93 @@
+---
+# Read-only storage baseline of the Proxmox host (observability plan, Phase 0 / section 4.3).
+# Records NVMe wear, unsafe shutdowns (power-loss indicator), disk and thin-pool usage, and the
+# Proxmox backup jobs, so the new log and metric stores can be sized against facts.
+#
+# Usage:  ansible-playbook playbooks/infrastructure/storage-baseline.yml --limit proxmox
+#         ansible-playbook playbooks/infrastructure/storage-baseline.yml --limit proxmox -e install_smartmontools=true
+# Nothing is changed unless install_smartmontools=true and smartctl is missing.
+- name: Storage baseline on the Proxmox host
+  hosts: proxmox
+  gather_facts: no
+
+  vars:
+    nvme_device: /dev/nvme0
+    install_smartmontools: false
+
+  tasks:
+    - name: Check for smartctl
+      command: which smartctl
+      register: smartctl_path
+      changed_when: false
+      failed_when: false
+
+    - name: Install smartmontools (only when asked)
+      apt:
+        name: smartmontools
+        state: present
+        update_cache: yes
+      when: smartctl_path.rc != 0 and install_smartmontools | bool
+
+    - name: Stop if smartctl is unavailable
+      fail:
+        msg: "smartctl is not installed. Re-run with -e install_smartmontools=true, or install smartmontools yourself."
+      when: smartctl_path.rc != 0 and not (install_smartmontools | bool)
+
+    - name: Read NVMe SMART data
+      command: smartctl -a {{ nvme_device }}
+      register: smart
+      changed_when: false
+      failed_when: smart.rc >= 8   # bits 0-2 are command/device errors; higher bits are health flags we read below
+
+    - name: List block devices, filesystems and usage
+      shell: |
+        echo "== lsblk"; lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+        echo; echo "== df -h"; df -h -x tmpfs -x devtmpfs
+      register: disks
+      changed_when: false
+
+    - name: Proxmox storage status
+      command: pvesm status
+      register: pvesm
+      changed_when: false
+      failed_when: false
+
+    - name: LVM thin pool usage (data_percent is real use of thin-provisioned space)
+      shell: lvs --units g -o lv_name,vg_name,lv_size,data_percent,metadata_percent,lv_attr 2>/dev/null || true
+      register: lvm
+      changed_when: false
+
+    - name: ZFS pools (if any)
+      shell: command -v zpool >/dev/null && zpool list || echo "no zfs"
+      register: zfs
+      changed_when: false
+
+    - name: Proxmox backup jobs and recent backups
+      shell: |
+        echo "== scheduled backup jobs"; pvesh get /cluster/backup --output-format json-pretty 2>/dev/null || echo "none or not readable"
+      register: backups
+      changed_when: false
+
+    - name: Summarise the figures that matter
+      debug:
+        msg:
+          - "NVMe {{ nvme_device }}"
+          - "  Percentage Used:    {{ (smart.stdout | regex_search('Percentage Used:\\s+([0-9]+)%', '\\1') or ['not reported'])[0] }} %   (rated life consumed; alert plan: > 80)"
+          - "  Data Units Written: {{ (smart.stdout | regex_search('Data Units Written:\\s+([0-9,]+)', '\\1') or ['not reported'])[0] }}   (1 unit = 512,000 bytes; multiply and compare with the drive's rated TBW)"
+          - "  Available Spare:    {{ (smart.stdout | regex_search('Available Spare:\\s+([0-9]+)%', '\\1') or ['not reported'])[0] }} %"
+          - "  Media Errors:       {{ (smart.stdout | regex_search('Media and Data Integrity Errors:\\s+([0-9]+)', '\\1') or ['not reported'])[0] }}   (should be 0)"
+          - "  Unsafe Shutdowns:   {{ (smart.stdout | regex_search('Unsafe Shutdowns:\\s+([0-9]+)', '\\1') or ['not reported'])[0] }}   (each one is an unclean power loss; a UPS drives this to zero)"
+          - "  Power Cycles:       {{ (smart.stdout | regex_search('Power Cycles:\\s+([0-9,]+)', '\\1') or ['not reported'])[0] }}"
+          - "  Model:              {{ (smart.stdout | regex_search('Model Number:\\s+(.+)', '\\1') or ['unknown'])[0] }}"
+
+    - name: Full detail for the record
+      debug:
+        msg:
+          - "{{ disks.stdout_lines }}"
+          - "== pvesm status"
+          - "{{ pvesm.stdout_lines }}"
+          - "== lvs"
+          - "{{ lvm.stdout_lines }}"
+          - "== zpool"
+          - "{{ zfs.stdout_lines }}"
+          - "{{ backups.stdout_lines }}"
