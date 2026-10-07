@@ -1,0 +1,146 @@
+# promtool unit tests for alerts/app.yml: they prove the alerts fire on the situations they are
+# written for, and stay quiet on the ones that must not page. Kept OUT of alerts/ because that whole
+# directory is loaded by Prometheus as rule files. Run from the prometheus directory:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/app.test.yml
+rule_files:
+  - ../alerts/app.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---- 5xx rate: 10 % of 1 req/s for 10 minutes ---------------------------------------------
+  - name: error rate fires with real traffic
+    interval: 1m
+    input_series:
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod", status_class="2xx", route="/x", pod="a"}'
+        values: '0+54x20'   # 0.9 req/s
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod", status_class="5xx", route="/x", pod="a"}'
+        values: '0+6x20'    # 0.1 req/s -> 10 %
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AppHighErrorRate
+        exp_alerts:
+          - exp_labels: {severity: critical, job: tfd-api, env: prod}
+            exp_annotations:
+              summary: "tfd-api: 10% of responses are 5xx"
+              description: "Over 2 % of tfd-api responses were 5xx for 5 minutes. Open the TFD Services dashboard, then the error issues in GlitchTip, then the traces (Explore, Tempo, status = error)."
+              runbook: "homelab-journey/docs/monitoring-phase3.md#apphigherrorrate"
+
+  - name: a lone error in a quiet period does not page
+    interval: 1m
+    input_series:
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod", status_class="2xx", route="/x"}'
+        values: '0+0x20 0+0x20'
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod", status_class="5xx", route="/x"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'   # one 5xx, then nothing: ratio 100 % but ~0 req/s
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AppHighErrorRate
+        exp_alerts: []
+
+  - name: dev never pages on errors
+    interval: 1m
+    input_series:
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="dev", status_class="5xx", route="/x"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AppHighErrorRate
+        exp_alerts: []
+
+  # ---- latency -----------------------------------------------------------------------------
+  - name: slow API fires after 10 minutes
+    interval: 1m
+    input_series:
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", le="1"}'
+        values: '0+0x30'
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", le="2.5"}'
+        values: '0+60x30'
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", le="+Inf"}'
+        values: '0+60x30'
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ApiLatencyHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, job: tfd-api, env: prod}
+            exp_annotations:
+              summary: "API p95 latency is 2.425s"
+              description: "The API's 95th percentile response time has been above 1.5 s for 10 minutes. The slowest requests carry a trace link (exemplar) on the TFD Services latency panel."
+              runbook: "homelab-journey/docs/monitoring-phase3.md#apilatencyhigh"
+
+  # ---- dependencies ------------------------------------------------------------------------
+  - name: mongo unreachable from the API is critical
+    interval: 1m
+    input_series:
+      - series: 'tfd_dependency_up{job="tfd-api", env="prod", dependency="mongo", pod="api-1"}'
+        values: '1 1 0 0 0 0 0 0'
+      - series: 'tfd_dependency_up{job="tfd-api", env="prod", dependency="redis", pod="api-1"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: MongoUnreachableFromApi
+        exp_alerts:
+          - exp_labels: {severity: critical, job: tfd-api, env: prod, dependency: mongo, pod: api-1}
+            exp_annotations:
+              summary: "tfd-api pod api-1 cannot reach MongoDB"
+              description: "The readiness check fails: the pod is out of rotation. If every API pod reports this, the API is down. Check mongodb on database-vm."
+              runbook: "homelab-journey/docs/monitoring-phase3.md#dependencyunreachable"
+      - eval_time: 7m
+        alertname: RedisUnreachableFromApi
+        exp_alerts: []
+
+  # ---- memory near the container limit (joins the app's RSS to the kube-state-metrics limit) --
+  - name: pod above 90 percent of its memory limit
+    interval: 1m
+    input_series:
+      - series: 'process_resident_memory_bytes{job="tfd-api", env="prod", namespace="prod", pod="api-1"}'
+        values: '300000000x20'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="prod", pod="api-1", container="tfd-api"}'
+        values: '320000000x20'
+      - series: 'process_resident_memory_bytes{job="tfd-api", env="prod", namespace="prod", pod="api-2"}'
+        values: '150000000x20'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="prod", pod="api-2", container="tfd-api"}'
+        values: '320000000x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AppMemoryNearLimit
+        exp_alerts:
+          - exp_labels: {severity: warning, job: tfd-api, env: prod, namespace: prod, pod: api-1}
+            exp_annotations:
+              summary: "tfd-api pod api-1 uses 93.75% of its memory limit"
+              description: "The process is near its container memory limit and will be OOM-killed. Raise the limit in k8s/prod/*.yaml or find the leak."
+              runbook: "homelab-journey/docs/monitoring-phase3.md#appmemorynearlimit"
+
+  # ---- domain ------------------------------------------------------------------------------
+  - name: a notification waiting 20 minutes
+    interval: 1m
+    input_series:
+      - series: 'tfd_notification_pending_oldest_age_seconds{job="tfd-bot", env="prod"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NotificationOutboxStuck
+        exp_alerts:
+          - exp_labels: {severity: warning, job: tfd-bot, env: prod}
+            exp_annotations:
+              summary: "Telegram notifications are waiting 25m 0s"
+              description: "A due notification has waited over 15 minutes: the dispatcher in tfd-bot is stuck, or Telegram rejects the messages. Check `kubectl -n prod logs deploy/tfd-bot-prod` and the ops group for dispatcher alerts."
+              runbook: "homelab-journey/docs/monitoring-phase3.md#notificationoutboxstuck"
+
+  # ---- security ----------------------------------------------------------------------------
+  - name: login failures from many attempts
+    interval: 1m
+    input_series:
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod", route="/auth/login-cookie", status_class="4xx", method="POST"}'
+        values: '0+60x30'   # 1/s
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LoginFailureSpike
+        exp_alerts:
+          - exp_labels: {severity: warning, env: prod}
+            exp_annotations:
+              summary: "Failed logins: 1 per second"
+              description: "Login attempts are failing at a high rate: credential stuffing, or a broken login flow after a deploy."
+              runbook: "homelab-journey/docs/monitoring-phase3.md#throttlingspike"

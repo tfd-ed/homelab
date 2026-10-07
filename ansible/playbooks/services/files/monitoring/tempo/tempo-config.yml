@@ -1,0 +1,67 @@
+# Tempo, single binary, local storage (observability plan, Phase 3).
+# Deployed verbatim by playbooks/services/monitoring-setup.yml. Validate with:
+#   docker run --rm -v "$PWD/tempo-config.yml:/etc/tempo/config.yml:ro" grafana/tempo:2.10.2 -config.file=/etc/tempo/config.yml -config.verify
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        # The in-cluster collector (alloy-traces) forwards here after tail sampling.
+        grpc:
+          endpoint: 0.0.0.0:4317
+          # A burst of spans must not be refused with an opaque error.
+          max_recv_msg_size_mib: 8
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    # Traces are kept 7 days. The collector already drops most OK traces, so this stays small.
+    block_retention: 168h
+
+# Turns spans into metrics (request rate, errors, duration per service and the service graph)
+# and writes them to Prometheus, which is how the service map in Grafana is drawn.
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    service_graphs:
+      dimensions: []
+    span_metrics:
+      # The route template is the only extra dimension: low cardinality by construction.
+      dimensions: [http.route]
+      enable_target_info: false
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
+    ingestion:
+      # Guard rails for an 80 GB VM shared with Prometheus and Loki.
+      rate_limit_bytes: 5000000
+      burst_size_bytes: 10000000
+      max_traces_per_user: 20000

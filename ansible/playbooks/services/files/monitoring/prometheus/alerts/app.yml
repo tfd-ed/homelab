@@ -1,0 +1,232 @@
+# Application alerts (observability plan, Phase 3): symptoms users feel, from the metrics the API,
+# bot and SSR pods expose. Deployed verbatim (`copy`), so the Go-template braces are never touched
+# by Jinja. Validate with:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 check rules /w/app.yml
+# and the unit tests in ../tests: promtool test rules tests/app.test.yml
+#
+# Series come from Alloy in K3s (remote write): job = tfd-api | tfd-bot | tfd-blog, env = prod | dev.
+# Only prod pages; the thresholds are a first guess, tune them after two weeks of real data.
+groups:
+  - name: tfd-app-errors
+    rules:
+      # More than 2 % of responses are 5xx, over 5 minutes, with enough traffic for that to mean
+      # something (the 0.05 req/s floor is about 15 requests in the window).
+      - alert: AppHighErrorRate
+        expr: |
+          (
+            sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job=~"tfd-api|tfd-blog", status_class="5xx"}[5m]))
+            /
+            sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job=~"tfd-api|tfd-blog"}[5m]))
+          ) > 0.02
+          and
+          sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job=~"tfd-api|tfd-blog"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }}: {{ $value | humanizePercentage }} of responses are 5xx"
+          description: "Over 2 % of {{ $labels.job }} responses were 5xx for 5 minutes. Open the TFD Services dashboard, then the error issues in GlitchTip, then the traces (Explore, Tempo, status = error)."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#apphigherrorrate"
+
+      - alert: ApiLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum by (le, job, env) (rate(http_server_duration_seconds_bucket{env="prod", job="tfd-api"}[10m]))) > 1.5
+          and
+          sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-api"}[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency is {{ $value | humanizeDuration }}"
+          description: "The API's 95th percentile response time has been above 1.5 s for 10 minutes. The slowest requests carry a trace link (exemplar) on the TFD Services latency panel."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#apilatencyhigh"
+
+      - alert: SsrLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum by (le, job, env) (rate(http_server_duration_seconds_bucket{env="prod", job="tfd-blog"}[10m]))) > 2
+          and
+          sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-blog"}[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSR p95 latency is {{ $value | humanizeDuration }}"
+          description: "Page renders are slow (p95 over 2 s for 10 minutes). Check whether the API leg is slow too: the trace of a slow page shows where the time went."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#apilatencyhigh"
+
+  - name: tfd-app-health
+    rules:
+      # The pods stopped answering their metrics port, while Kubernetes still thinks they are fine.
+      - alert: AppMetricsEndpointDown
+        expr: up{env="prod", job=~"tfd-api|tfd-bot|tfd-blog"} == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No metrics from {{ $labels.job }} pod {{ $labels.pod }}"
+          description: "Alloy cannot scrape the metrics port of {{ $labels.pod }}. The pod may be hung, or METRICS_PORT / the prometheus.io annotations are wrong."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#appmetricsmissing"
+
+      # The series vanished entirely: the metrics pipeline itself (Alloy remote write) is broken,
+      # or the app was deployed without METRICS_PORT.
+      - alert: AppMetricsMissing
+        expr: absent_over_time(up{env="prod", job="tfd-api"}[10m])
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No application metrics are reaching Prometheus"
+          description: "Nothing has arrived from the tfd-api pods for 15 minutes. Check `kubectl -n monitoring logs ds/alloy` for remote write errors and that Prometheus runs with --web.enable-remote-write-receiver."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#appmetricsmissing"
+
+      - alert: MongoUnreachableFromApi
+        expr: tfd_dependency_up{env="prod", dependency="mongo"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} pod {{ $labels.pod }} cannot reach MongoDB"
+          description: "The readiness check fails: the pod is out of rotation. If every API pod reports this, the API is down. Check mongodb on database-vm."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#dependencyunreachable"
+
+      # Redis and MinIO down only degrade the API (it stays in rotation, see /health/ready), but
+      # a Redis outage also makes requests hang, so do not let this sit.
+      - alert: RedisUnreachableFromApi
+        expr: tfd_dependency_up{env="prod", dependency="redis"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} pod {{ $labels.pod }} cannot reach Redis"
+          description: "Redis backs rate limiting, the cache and realtime; with it down API requests can hang until it returns. Check redis on database-vm."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#dependencyunreachable"
+
+      - alert: MinioUnreachableFromApi
+        expr: tfd_dependency_up{env="prod", dependency="minio"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} pod {{ $labels.pod }} cannot reach MinIO"
+          description: "Uploads and downloads of files will fail. Check minio on minio-vm."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#dependencyunreachable"
+
+      - alert: ApiUnreachableFromSsr
+        expr: tfd_dependency_up{env="prod", job="tfd-blog", dependency="api"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SSR pod {{ $labels.pod }} cannot reach the API"
+          description: "The Nuxt server's check of the API's /health/ready fails (or the API reports MongoDB down). Pages that need data show errors."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#dependencyunreachable"
+
+      - alert: DependencySlow
+        expr: tfd_dependency_ping_seconds{env="prod"} > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.dependency }} answers slowly from {{ $labels.pod }} ({{ $value | humanizeDuration }})"
+          description: "A health-check round trip to {{ $labels.dependency }} has taken over 1 s for 10 minutes."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#dependencyunreachable"
+
+      - alert: NodeEventLoopLagging
+        expr: nodejs_eventloop_lag_p99_seconds{env="prod"} > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} pod {{ $labels.pod }} event loop lags {{ $value | humanizeDuration }}"
+          description: "The Node.js event loop is blocked for long stretches (p99 over 0.5 s): CPU-bound work or a memory squeeze. Look at the pod's CPU and memory."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#nodeeventlooplagging"
+
+      # OOM kills restart the pod (KubeContainerOOMKilled fires after the fact); this fires before.
+      - alert: AppMemoryNearLimit
+        expr: |
+          process_resident_memory_bytes{env="prod", job=~"tfd-api|tfd-bot|tfd-blog"}
+          / on (namespace, pod) group_left
+          max by (namespace, pod) (kube_pod_container_resource_limits{resource="memory", namespace="prod"})
+          > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} pod {{ $labels.pod }} uses {{ $value | humanizePercentage }} of its memory limit"
+          description: "The process is near its container memory limit and will be OOM-killed. Raise the limit in k8s/prod/*.yaml or find the leak."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#appmemorynearlimit"
+
+  - name: tfd-app-domain
+    rules:
+      - alert: NotificationOutboxStuck
+        expr: tfd_notification_pending_oldest_age_seconds{env="prod"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Telegram notifications are waiting {{ $value | humanizeDuration }}"
+          description: "A due notification has waited over 15 minutes: the dispatcher in tfd-bot is stuck, or Telegram rejects the messages. Check `kubectl -n prod logs deploy/tfd-bot-prod` and the ops group for dispatcher alerts."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#notificationoutboxstuck"
+
+      - alert: NotificationsFailing
+        expr: delta(tfd_notification_outbox{env="prod", status="failed"}[1h]) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanize }} more notifications failed in the last hour"
+          description: "The number of failed notification rows is growing. Look at the failed rows' lastError in MongoDB."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#notificationoutboxstuck"
+
+      - alert: RealtimePublishFailing
+        expr: sum by (env) (rate(tfd_realtime_publish_failures_total{env="prod"}[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Realtime events are failing to reach Redis"
+          description: "Publishes to Redis keep failing, so open browsers stop receiving live updates. Check Redis."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#realtimepublishfailing"
+
+      - alert: RealtimeHandshakeRejectionsSpike
+        expr: sum by (env) (rate(tfd_realtime_handshake_rejections_total{env="prod"}[10m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Realtime handshakes are being rejected ({{ $value | humanize }}/s)"
+          description: "Many websocket connections are refused (bad token, expired session, wrong origin): a deploy that broke auth, or someone probing."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#realtimepublishfailing"
+
+  - name: tfd-app-security
+    rules:
+      - alert: ThrottlingSpike
+        expr: sum by (env) (rate(http_server_responses_total{env="prod", job="tfd-api", status="429"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The API is answering 429 to {{ $value | humanize }} requests per second"
+          description: "Rate limiting is rejecting a lot of requests: a client bug looping, a scraper, or an attack. The request log in Loki (`| json | status = 429`) shows the routes and countries."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#throttlingspike"
+
+      - alert: LoginFailureSpike
+        expr: sum by (env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-api", route=~"/auth/login.*", status_class="4xx"}[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Failed logins: {{ $value | humanize }} per second"
+          description: "Login attempts are failing at a high rate: credential stuffing, or a broken login flow after a deploy."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#throttlingspike"
+
+  - name: tracing
+    rules:
+      - alert: TraceCollectorDroppingSpans
+        expr: sum(rate(otelcol_processor_dropped_spans_total{job="alloy-traces"}[10m])) > 0 or sum(rate(otelcol_exporter_send_failed_spans_total{job="alloy-traces"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The trace collector is dropping spans"
+          description: "alloy-traces cannot keep up or cannot reach Tempo. Check `kubectl -n monitoring logs deploy/alloy-traces` and `docker logs tempo` on the monitoring VM."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#tracecollectordroppingspans"

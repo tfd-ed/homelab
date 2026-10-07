@@ -1,0 +1,159 @@
+# Managed by Ansible (playbooks/services/glitchtip-setup.yml). Rendered to a temp file, applied, deleted.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: glitchtip-secrets
+  namespace: {{ glitchtip_namespace }}
+type: Opaque
+stringData:
+  SECRET_KEY: "{{ glitchtip_secret_key }}"
+  DATABASE_URL: "postgres://{{ glitchtip_db_user }}:{{ glitchtip_db_password | urlencode | replace('/', '%2F') }}@{{ db_host }}:5432/{{ glitchtip_db_name }}"
+{% if glitchtip_email_url | length > 0 %}
+  EMAIL_URL: "{{ glitchtip_email_url }}"
+{% endif %}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: glitchtip-uploads
+  namespace: {{ glitchtip_namespace }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      # Uploaded source maps. CI re-uploads them on every deploy, so this is not precious.
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glitchtip
+  namespace: {{ glitchtip_namespace }}
+spec:
+  replicas: 1
+  # The uploads volume is ReadWriteOnce, so the old pod must stop before the new one starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: glitchtip
+  template:
+    metadata:
+      labels:
+        app: glitchtip
+    spec:
+      containers:
+        - name: glitchtip
+          image: glitchtip/glitchtip:{{ glitchtip_version }}
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            # web + background worker in one process; migrations run at start.
+            - name: SERVER_ROLE
+              value: all_in_one
+            - name: SECRET_KEY
+              valueFrom: { secretKeyRef: { name: glitchtip-secrets, key: SECRET_KEY } }
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: glitchtip-secrets, key: DATABASE_URL } }
+{% if glitchtip_email_url | length > 0 %}
+            - name: EMAIL_URL
+              valueFrom: { secretKeyRef: { name: glitchtip-secrets, key: EMAIL_URL } }
+{% else %}
+            # No SMTP configured: emails are printed to the pod log instead of being sent.
+            - name: EMAIL_URL
+              value: "consolemail://"
+{% endif %}
+            - name: DEFAULT_FROM_EMAIL
+              value: "{{ glitchtip_from_email }}"
+            - name: GLITCHTIP_DOMAIN
+              value: "{{ glitchtip_base_url }}"
+            # Empty = no Valkey; the task queue and cache live in Postgres. Error volume here is
+            # small, and this saves a pod and ~100 MB.
+            - name: VALKEY_URL
+              value: ""
+            - name: ENABLE_USER_REGISTRATION
+              value: "{{ glitchtip_registration }}"
+            - name: GLITCHTIP_RETENTION_DAYS
+              value: "{{ glitchtip_retention_days }}"
+            # Not used here: Uptime Kuma/blackbox cover uptime, Loki covers logs.
+            - name: GLITCHTIP_ENABLE_UPTIME
+              value: "False"
+            - name: GLITCHTIP_ENABLE_LOGS
+              value: "False"
+            - name: ENABLE_ADMIN
+              value: "False"
+            # GlitchTip refuses to call webhooks that resolve to a private address. The alert
+            # webhook points at the API's in-cluster Service (-> Telegram), so this must be on.
+            # Safe here: only logged-in org members can set a webhook URL, and the UI is behind
+            # Cloudflare Access.
+            - name: GLITCHTIP_ALLOW_PRIVATE_IPS
+              value: "True"
+          volumeMounts:
+            - name: uploads
+              mountPath: /code/uploads
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "768Mi"
+              cpu: "1000m"
+          # /_health/ is what the image's own Docker healthcheck uses. The first start runs
+          # migrations, hence the generous delays.
+          readinessProbe:
+            httpGet:
+              path: /_health/
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /_health/
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 6
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: glitchtip-uploads
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glitchtip
+  namespace: {{ glitchtip_namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app: glitchtip
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+# Only the human UI is exposed (behind Cloudflare Access). Event ingestion never uses this host:
+# browsers post to tfdevs.com/_t/events and the servers use the in-cluster Service.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: glitchtip
+  namespace: {{ glitchtip_namespace }}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ glitchtip_domain }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: glitchtip
+                port:
+                  number: 8000

@@ -41,7 +41,7 @@ Application services, databases, monitoring, and CI/CD pipeline setup.
 - Prometheus: http://192.168.100.220:9090
 - Grafana: http://192.168.100.220:3000 and https://grafana.tfdevs.com (Cloudflare Access)
 
-**Runbooks:** `../../docs/monitoring-phase0.md` (alerts), `../../docs/monitoring-phase1.md` (logs, request ids)
+**Runbooks:** `../../docs/monitoring-phase0.md` (alerts), `../../docs/monitoring-phase1.md` (logs, request ids), `../../docs/monitoring-phase2.md` (error tracking, `glitchtip-setup.yml`), `../../docs/monitoring-phase3.md` (metrics and traces, `database-exporters-setup.yml`)
 
 **Helper script:** `../../run-monitoring-setup.sh`
 

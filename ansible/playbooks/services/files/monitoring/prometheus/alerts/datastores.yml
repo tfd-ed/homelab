@@ -1,0 +1,79 @@
+# Datastore alerts (observability plan, Phase 3): MongoDB, Redis and MinIO, from the exporters on
+# database-vm and MinIO's own endpoint. PostgreSQL is covered in baseline.yml.
+# Validate with:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 check rules /w/datastores.yml
+groups:
+  - name: datastores
+    rules:
+      - alert: MongoDown
+        expr: mongodb_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MongoDB is down"
+          description: "The exporter cannot talk to mongod on database-vm. Everything the API stores is unavailable. `docker ps` and `docker logs mongodb` on database-vm."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#datastores"
+
+      - alert: MongoConnectionsHigh
+        expr: |
+          mongodb_ss_connections{conn_type="current"}
+          / (mongodb_ss_connections{conn_type="current"} + mongodb_ss_connections{conn_type="available"})
+          > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MongoDB uses {{ $value | humanizePercentage }} of its connections"
+          description: "Close to the connection limit: a pod leaking connections, or too many replicas."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#datastores"
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "The exporter cannot talk to Redis on database-vm. Rate limiting, the cache and realtime are affected, and API requests can hang. `docker logs redis` on database-vm."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#datastores"
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_max_bytes > 0 and redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis uses {{ $value | humanizePercentage }} of its memory limit"
+          description: "At its maxmemory, Redis starts evicting keys (or refusing writes, depending on the policy)."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#datastores"
+
+      - alert: RedisEvictingKeys
+        expr: rate(redis_evicted_keys_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis is evicting keys"
+          description: "Keys are being thrown away because memory is full: cached data and rate-limit counters are being lost."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#datastores"
+
+      - alert: MinioDown
+        expr: up{job="minio"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MinIO is down"
+          description: "Prometheus cannot read MinIO's metrics endpoint: uploads and downloads fail. If it only started after enabling the job, check the bearer token (docs/monitoring-phase3.md)."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#datastores"
+
+      - alert: MinioDriveOffline
+        expr: minio_cluster_drive_offline_total > 0 or minio_cluster_nodes_offline_total > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MinIO reports an offline drive or node"
+          description: "MinIO sees a drive or node it cannot use. On a single-disk setup this means data is unavailable."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#datastores"

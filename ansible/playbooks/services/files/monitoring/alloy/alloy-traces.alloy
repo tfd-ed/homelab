@@ -1,0 +1,92 @@
+// Trace collector in the K3s cluster (observability plan, Phase 3). One replica, deployed by
+// playbooks/kubernetes/alloy-setup.yml as the ConfigMap `alloy-traces-config`.
+//
+// Apps (API, bot, PDF renderer, SSR) send every span here over OTLP/HTTP. Because ONE instance
+// sees all spans of a trace, it can decide after the trace is complete: keep every trace that
+// has an error or took over a second, and a sample of the rest. Kept traces go to Tempo.
+
+logging {
+  level  = "warn"
+  format = "logfmt"
+}
+
+otelcol.receiver.otlp "apps" {
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+
+  output {
+    traces = [otelcol.processor.memory_limiter.guard.input]
+  }
+}
+
+// Drop data instead of being killed when something upstream floods the collector.
+otelcol.processor.memory_limiter "guard" {
+  check_interval         = "1s"
+  limit_percentage       = 80
+  spike_limit_percentage = 25
+
+  output {
+    traces = [otelcol.processor.tail_sampling.keep_interesting.input]
+  }
+}
+
+otelcol.processor.tail_sampling "keep_interesting" {
+  // Wait this long after the first span for the rest of the trace to arrive.
+  decision_wait = "10s"
+  num_traces    = 20000
+
+  policy {
+    name = "errors"
+    type = "status_code"
+
+    status_code {
+      status_codes = ["ERROR"]
+    }
+  }
+
+  policy {
+    name = "slow"
+    type = "latency"
+
+    latency {
+      threshold_ms = 1000
+    }
+  }
+
+  // Everything else: a small sample, enough to see normal behaviour.
+  policy {
+    name = "sample"
+    type = "probabilistic"
+
+    probabilistic {
+      sampling_percentage = 10
+    }
+  }
+
+  output {
+    traces = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  timeout = "5s"
+
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = sys.env("TEMPO_OTLP_ENDPOINT")
+
+    tls {
+      insecure = true
+    }
+  }
+}
