@@ -130,6 +130,7 @@ homelab-journey/
 │       │   ├── cicd-setup.yml
 │       │   ├── ai-vm-setup.yml
 │       │   ├── plausible-setup.yml
+│       │   ├── glitchtip-setup.yml   # error tracking (Phase 2)
 │       │   └── minio-*.yml    # MinIO setup / migrate / cleanup
 │       └── networking/        # Network & remote access
 │           ├── cloudflare-tunnel-setup.yml
@@ -308,6 +309,10 @@ ansible-playbook playbooks/services/monitoring-dashboards-setup.yml
 # Logs (Phase 1): ship pod logs and the gateway access log to Loki. Runbook: docs/monitoring-phase1.md
 ansible-playbook playbooks/kubernetes/alloy-setup.yml
 ansible-playbook playbooks/networking/gateway-logging-setup.yml
+
+# Error tracking (Phase 2): GlitchTip in K3s, database on database-vm. Needs POSTGRES_PASSWORD,
+# GLITCHTIP_DB_PASSWORD and GLITCHTIP_SECRET_KEY. Runbook: docs/monitoring-phase2.md
+ansible-playbook playbooks/services/glitchtip-setup.yml
 ```
 
 **Deploy node-exporter on k8s nodes** (required for k8s-nodes targets in Prometheus):
