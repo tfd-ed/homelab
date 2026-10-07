@@ -1,0 +1,109 @@
+# Managed by Ansible (playbooks/services/monitoring-setup.yml). Do not edit on the VM.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'homelab'
+    environment: 'production'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/alerts/*.yml
+
+scrape_configs:
+  # The monitoring stack itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+
+  - job_name: 'blackbox-exporter'
+    static_configs:
+      - targets: ['blackbox-exporter:9115']
+
+  # Node Exporter - Monitoring VM
+  - job_name: 'node-exporter-monitoring'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          instance: 'monitoring-vm'
+
+  # K8s nodes (node-exporter-setup.yml must have been run)
+  - job_name: 'k8s-nodes'
+    static_configs:
+      - targets:
+{% for node in k8s_node_targets %}
+          - '{{ node }}:9100'
+{% endfor %}
+        labels:
+          cluster: 'k8s'
+
+  # kube-state-metrics, exposed on a NodePort by playbooks/kubernetes/kube-state-metrics-setup.yml.
+  # One target only: every node would return the same series and double the data.
+  - job_name: 'kube-state-metrics'
+    static_configs:
+      - targets: ['{{ kube_state_metrics_target }}']
+
+  # PostgreSQL (postgres-exporter, deployed by database-setup.yml)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['192.168.100.205:9187']
+        labels:
+          instance: 'database-vm'
+
+  # Docker Registry debug/metrics endpoint (port 5001)
+  - job_name: 'docker-registry'
+    static_configs:
+      - targets: ['192.168.100.240:5001']
+        labels:
+          instance: 'ci-cd-vm'
+
+  # Public HTTPS probes: the full user path through Cloudflare.
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+{% for t in blackbox_http_targets %}
+      - targets: ['{{ t.url }}']
+        labels:
+          probe: '{{ t.probe }}'
+          env: '{{ t.env }}'
+          severity: '{{ t.severity }}'
+{% endfor %}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # TCP reachability: SSH on every VM, database ports, ingress NodePort, registry.
+  - job_name: 'blackbox-tcp'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+{% for t in blackbox_tcp_targets %}
+      - targets: ['{{ t.addr }}']
+        labels:
+          probe: '{{ t.probe }}'
+          name: '{{ t.name }}'
+          env: '{{ t.env | default("prod") }}'
+          severity: '{{ t.severity }}'
+{% endfor %}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

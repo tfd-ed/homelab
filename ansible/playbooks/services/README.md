@@ -21,20 +21,26 @@ Application services, databases, monitoring, and CI/CD pipeline setup.
 ---
 
 ### monitoring-setup.yml
-**Purpose:** Deploy Prometheus, Grafana, and Node Exporter  
+**Purpose:** Deploy Prometheus, Alertmanager (Telegram), blackbox-exporter, Grafana and Node Exporter  
 **Target:** monitoring (192.168.100.220)  
-**Usage:** `ansible-playbook playbooks/services/monitoring-setup.yml`
+**Usage:** `set -a && . ./.env && set +a && ansible-playbook playbooks/services/monitoring-setup.yml`
+
+**Requires (environment, see `ansible/.env.example`):** `GRAFANA_ADMIN_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OPS_CHAT_ID`; optional `HEARTBEAT_URL`, `TELEGRAM_THREAD_CRITICAL`, `TELEGRAM_THREAD_WARNING`.
 
 **Deploys:**
-- Prometheus v2.48.1 (port 9090)
-- Grafana 10.2.3 (port 3000)
+- Prometheus v2.48.1 (port 9090) with alert rules (`files/monitoring/prometheus/alerts/`)
+- Alertmanager v0.28.1 (loopback 9093) routing to Telegram, Watchdog to an external heartbeat
+- blackbox-exporter v0.25.0 (loopback 9115): public HTTPS probes, VM SSH, database ports
+- Grafana 10.2.3 (port 3000), admin password from the environment
 - Node Exporter (system metrics)
-- 30-day metrics retention
-- Pre-configured scrape targets
+- 30-day / 40 GB metrics retention
+- Validates configs (promtool, amtool) before restarting anything
 
 **Access:**
 - Prometheus: http://192.168.100.220:9090
-- Grafana: http://192.168.100.220:3000 (admin/admin)
+- Grafana: http://192.168.100.220:3000 and https://grafana.tfdevs.com (Cloudflare Access)
+
+**Runbook, alert catalogue and verification:** `../../docs/monitoring-phase0.md`
 
 **Helper script:** `../../run-monitoring-setup.sh`
 

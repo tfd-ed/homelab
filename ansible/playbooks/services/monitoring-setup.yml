@@ -1,5 +1,21 @@
 ---
-- name: Setup Monitoring Stack (Prometheus + Grafana) on monitoring VM
+# Monitoring stack on the monitoring VM: Prometheus, Alertmanager (Telegram), blackbox-exporter,
+# Grafana, node-exporter.  (Observability plan, Phase 0: alerts, probes, external heartbeat.)
+#
+# Required environment variables on the machine running ansible (see ansible/.env.example):
+#   GRAFANA_ADMIN_PASSWORD   at least 12 characters of A-Z a-z 0-9 . _ @ % + = -   (never "admin")
+#   TELEGRAM_BOT_TOKEN       bot used ONLY to send alerts (a dedicated bot is recommended)
+#   TELEGRAM_OPS_CHAT_ID     numeric id of the ops group, e.g. -1001234567890
+# Optional:
+#   HEARTBEAT_URL            dead-man's-switch ping URL (e.g. a Healthchecks.io check). Without it
+#                            the Watchdog alert goes nowhere and a homelab outage stays silent.
+#   TELEGRAM_THREAD_CRITICAL / TELEGRAM_THREAD_WARNING   forum topic ids (0 or unset = no topic)
+#
+# Usage:
+#   cd ansible && set -a && . ./.env && set +a
+#   ansible-playbook playbooks/services/monitoring-setup.yml
+#   ansible-playbook playbooks/services/monitoring-setup.yml -e send_test_alert=true   # one test message
+- name: Setup Monitoring Stack (Prometheus, Alertmanager, Grafana) on monitoring VM
   hosts: monitoring
   become: yes
   gather_facts: yes
@@ -7,10 +23,87 @@
   vars:
     monitoring_dir: /opt/monitoring
     prometheus_version: "v2.48.1"
+    alertmanager_version: "v0.28.1"      # telegram_configs with bot_token_file / message_thread_id
+    blackbox_version: "v0.25.0"
     grafana_version: "10.2.3"
     prometheus_port: 9090
     grafana_port: 3000
     prometheus_retention: "30d"
+    # Keep Prometheus from filling the 80 GB VM disk even if series counts grow.
+    prometheus_retention_size: "40GB"
+    grafana_root_url: "https://grafana.tfdevs.com"
+    send_test_alert: false
+
+    # Secrets and settings come from the environment of the control machine, never from git.
+    grafana_admin_password: "{{ lookup('ansible.builtin.env', 'GRAFANA_ADMIN_PASSWORD') }}"
+    telegram_bot_token: "{{ lookup('ansible.builtin.env', 'TELEGRAM_BOT_TOKEN') }}"
+    telegram_chat_id: "{{ lookup('ansible.builtin.env', 'TELEGRAM_OPS_CHAT_ID') }}"
+    telegram_thread_critical: "{{ lookup('ansible.builtin.env', 'TELEGRAM_THREAD_CRITICAL') | default('0', true) }}"
+    telegram_thread_warning: "{{ lookup('ansible.builtin.env', 'TELEGRAM_THREAD_WARNING') | default('0', true) }}"
+    heartbeat_url: "{{ lookup('ansible.builtin.env', 'HEARTBEAT_URL') }}"
+
+    # ---- scrape and probe targets -------------------------------------------------------------
+    k8s_node_targets:
+      - 192.168.100.201
+      - 192.168.100.202
+      - 192.168.100.203
+    # kube-state-metrics NodePort (kubernetes/kube-state-metrics-setup.yml). One node only.
+    kube_state_metrics_target: "192.168.100.202:30686"
+
+    # Public HTTPS probes. `severity` is attached to the series and inherited by the alert.
+    blackbox_http_targets:
+      - { url: "https://tfdevs.com",                probe: site,      env: prod, severity: critical }
+      - { url: "https://api.tfdevs.com/health",     probe: api,       env: prod, severity: critical }
+      - { url: "https://dev.tfdevs.com",            probe: site,      env: dev,  severity: warning }
+      - { url: "https://api-dev.tfdevs.com/health", probe: api,       env: dev,  severity: warning }
+      - { url: "https://plausible.tfdevs.com",      probe: plausible, env: prod, severity: warning }
+
+    # TCP reachability. SSH on every VM tells you the VM is up; the service ports tell you the
+    # service is up. Database ports are published by database-setup.yml.
+    blackbox_tcp_targets:
+      - { addr: "192.168.100.50:8006",  probe: proxmox-ui, name: proxmox-host,  severity: critical }
+      - { addr: "192.168.100.201:22",   probe: ssh,        name: k8s-master,    severity: critical }
+      - { addr: "192.168.100.202:22",   probe: ssh,        name: k8s-worker-1,  severity: critical }
+      - { addr: "192.168.100.203:22",   probe: ssh,        name: k8s-worker-2,  severity: critical }
+      - { addr: "192.168.100.205:22",   probe: ssh,        name: database-vm,   severity: critical }
+      - { addr: "192.168.100.210:22",   probe: ssh,        name: app-gateway,   severity: critical }
+      - { addr: "192.168.100.230:22",   probe: ssh,        name: n8n,           severity: warning }
+      - { addr: "192.168.100.240:22",   probe: ssh,        name: ci-cd,         severity: warning }
+      - { addr: "192.168.100.250:22",   probe: ssh,        name: ai-vm,         severity: warning }
+      - { addr: "192.168.100.205:27017", probe: mongodb,    name: database-vm,   severity: critical }
+      - { addr: "192.168.100.205:6379", probe: redis,      name: database-vm,   severity: critical }
+      - { addr: "192.168.100.205:5432", probe: postgres,   name: database-vm,   severity: critical }
+      - { addr: "192.168.100.210:80",   probe: npm-http,   name: app-gateway,   severity: critical }
+      - { addr: "192.168.100.202:30389", probe: ingress-nodeport, name: k8s-worker-1, severity: critical }
+      - { addr: "192.168.100.240:5000", probe: registry,   name: ci-cd,         severity: warning }
+
+  pre_tasks:
+    - name: Refuse to deploy without real credentials
+      assert:
+        that:
+          - grafana_admin_password | length >= 12
+          - grafana_admin_password is match('^[A-Za-z0-9._@%+=-]+$')
+          - grafana_admin_password | lower != 'admin'
+          - telegram_bot_token | length > 20
+          - telegram_chat_id is match('^-?[0-9]+$')
+          - telegram_thread_critical is match('^[0-9]+$')
+          - telegram_thread_warning is match('^[0-9]+$')
+        fail_msg: >-
+          Set GRAFANA_ADMIN_PASSWORD (12+ chars from A-Z a-z 0-9 . _ @ % + = -, not "admin"),
+          TELEGRAM_BOT_TOKEN and TELEGRAM_OPS_CHAT_ID (numeric) in the environment first.
+          See ansible/.env.example and docs/monitoring-phase0.md.
+        quiet: true
+      no_log: true
+      delegate_to: localhost
+      become: no
+      run_once: true
+
+    - name: Warn when no external heartbeat is configured
+      debug:
+        msg: >-
+          HEARTBEAT_URL is not set. Without it a power or ISP outage in the homelab produces
+          silence, not an alert. See docs/monitoring-phase0.md section "External heartbeat".
+      when: heartbeat_url | length == 0
 
   tasks:
     - name: Update apt cache
@@ -34,6 +127,10 @@
         - "{{ monitoring_dir }}"
         - "{{ monitoring_dir }}/prometheus"
         - "{{ monitoring_dir }}/prometheus/data"
+        - "{{ monitoring_dir }}/prometheus/alerts"
+        - "{{ monitoring_dir }}/alertmanager"
+        - "{{ monitoring_dir }}/alertmanager/templates"
+        - "{{ monitoring_dir }}/blackbox"
         - "{{ monitoring_dir }}/grafana"
         - "{{ monitoring_dir }}/grafana/data"
         - "{{ monitoring_dir }}/grafana/provisioning"
@@ -41,64 +138,76 @@
         - "{{ monitoring_dir }}/grafana/provisioning/dashboards"
         - "{{ monitoring_dir }}/grafana/dashboards"
 
-    - name: Create Prometheus configuration
+    # ---- Alertmanager ------------------------------------------------------------------------
+    - name: Create Alertmanager data and secrets directories (owned by nobody)
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "65534"
+        group: "65534"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ monitoring_dir }}/alertmanager/data", mode: "0755" }
+        - { path: "{{ monitoring_dir }}/alertmanager/secrets", mode: "0700" }
+
+    - name: Write Telegram bot token (read from a file, never from the config)
       copy:
-        dest: "{{ monitoring_dir }}/prometheus/prometheus.yml"
-        content: |
-          global:
-            scrape_interval: 15s
-            evaluation_interval: 15s
-            external_labels:
-              cluster: 'homelab'
-              environment: 'production'
+        content: "{{ telegram_bot_token }}"
+        dest: "{{ monitoring_dir }}/alertmanager/secrets/telegram_token"
+        owner: "65534"
+        group: "65534"
+        mode: "0400"
+      no_log: true
 
-          scrape_configs:
-            # Prometheus itself
-            - job_name: 'prometheus'
-              static_configs:
-                - targets: ['localhost:9090']
+    - name: Write heartbeat URL
+      copy:
+        content: "{{ heartbeat_url }}"
+        dest: "{{ monitoring_dir }}/alertmanager/secrets/heartbeat_url"
+        owner: "65534"
+        group: "65534"
+        mode: "0400"
+      when: heartbeat_url | length > 0
+      no_log: true
 
-            # Node Exporter - Monitoring VM
-            - job_name: 'node-exporter-monitoring'
-              static_configs:
-                - targets: ['node-exporter:9100']
-                  labels:
-                    instance: 'monitoring-vm'
+    - name: Remove a stale heartbeat URL when none is configured
+      file:
+        path: "{{ monitoring_dir }}/alertmanager/secrets/heartbeat_url"
+        state: absent
+      when: heartbeat_url | length == 0
 
-            # K8s nodes (if node-exporter is deployed)
-            - job_name: 'k8s-nodes'
-              static_configs:
-                - targets: 
-                    - '192.168.100.201:9100'
-                    - '192.168.100.202:9100'
-                    - '192.168.100.203:9100'
-                  labels:
-                    cluster: 'k8s'
-
-            # PostgreSQL (if postgres-exporter is deployed)
-            - job_name: 'postgres'
-              static_configs:
-                - targets: ['192.168.100.205:9187']
-                  labels:
-                    instance: 'database-vm'
-
-            # Docker Registry debug/metrics endpoint (port 5001)
-            - job_name: 'docker-registry'
-              static_configs:
-                - targets: ['192.168.100.240:5001']
-                  labels:
-                    instance: 'ci-cd-vm'
-
-            # Add your application endpoints here
-            # - job_name: 'my-app'
-            #   static_configs:
-            #     - targets: ['app-host:port']
-
-          # Optional: Alerting rules
-          # rule_files:
-          #   - "alerts/*.yml"
+    - name: Create Alertmanager configuration
+      template:
+        src: "{{ playbook_dir }}/templates/monitoring/alertmanager.yml.j2"
+        dest: "{{ monitoring_dir }}/alertmanager/alertmanager.yml"
         mode: "0644"
 
+    - name: Install Telegram message template
+      copy:
+        src: "{{ playbook_dir }}/files/monitoring/alertmanager/telegram.tmpl"
+        dest: "{{ monitoring_dir }}/alertmanager/templates/telegram.tmpl"
+        mode: "0644"
+
+    # ---- blackbox-exporter -------------------------------------------------------------------
+    - name: Install blackbox-exporter modules
+      copy:
+        src: "{{ playbook_dir }}/files/monitoring/blackbox/blackbox.yml"
+        dest: "{{ monitoring_dir }}/blackbox/blackbox.yml"
+        mode: "0644"
+
+    # ---- Prometheus --------------------------------------------------------------------------
+    - name: Create Prometheus configuration
+      template:
+        src: "{{ playbook_dir }}/templates/monitoring/prometheus.yml.j2"
+        dest: "{{ monitoring_dir }}/prometheus/prometheus.yml"
+        mode: "0644"
+
+    - name: Install alert rules
+      copy:
+        src: "{{ playbook_dir }}/files/monitoring/prometheus/alerts/"
+        dest: "{{ monitoring_dir }}/prometheus/alerts/"
+        mode: "0644"
+
+    # ---- Grafana -----------------------------------------------------------------------------
     - name: Create Grafana datasource configuration
       copy:
         dest: "{{ monitoring_dir }}/grafana/provisioning/datasources/prometheus.yml"
@@ -112,6 +221,13 @@
               url: http://prometheus:9090
               isDefault: true
               editable: true
+            - name: Alertmanager
+              type: alertmanager
+              access: proxy
+              url: http://alertmanager:9093
+              editable: true
+              jsonData:
+                implementation: prometheus
         mode: "0644"
 
     - name: Create Grafana dashboard provisioning config
@@ -132,6 +248,18 @@
                 path: /etc/grafana/provisioning/dashboards
         mode: "0644"
 
+    - name: Write Grafana environment file (admin password lives here, not in docker-compose.yml)
+      copy:
+        dest: "{{ monitoring_dir }}/grafana.env"
+        content: |
+          GF_SECURITY_ADMIN_USER=admin
+          GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    # ---- Compose -----------------------------------------------------------------------------
     - name: Create Docker Compose file
       copy:
         dest: "{{ monitoring_dir }}/docker-compose.yml"
@@ -147,6 +275,7 @@
                 - '--config.file=/etc/prometheus/prometheus.yml'
                 - '--storage.tsdb.path=/prometheus'
                 - '--storage.tsdb.retention.time={{ prometheus_retention }}'
+                - '--storage.tsdb.retention.size={{ prometheus_retention_size }}'
                 - '--web.console.libraries=/usr/share/prometheus/console_libraries'
                 - '--web.console.templates=/usr/share/prometheus/consoles'
                 - '--web.enable-lifecycle'
@@ -154,7 +283,43 @@
                 - "{{ prometheus_port }}:9090"
               volumes:
                 - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+                - ./prometheus/alerts:/etc/prometheus/alerts:ro
                 - ./prometheus/data:/prometheus
+              networks:
+                - monitoring
+              depends_on:
+                - alertmanager
+                - blackbox-exporter
+
+            alertmanager:
+              image: prom/alertmanager:{{ alertmanager_version }}
+              container_name: alertmanager
+              restart: unless-stopped
+              command:
+                - '--config.file=/etc/alertmanager/alertmanager.yml'
+                - '--storage.path=/alertmanager'
+                - '--web.external-url=http://192.168.100.220:9093'
+              ports:
+                # Loopback only: Grafana and Prometheus reach it over the compose network.
+                - "127.0.0.1:9093:9093"
+              volumes:
+                - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+                - ./alertmanager/templates:/etc/alertmanager/templates:ro
+                - ./alertmanager/secrets:/etc/alertmanager/secrets:ro
+                - ./alertmanager/data:/alertmanager
+              networks:
+                - monitoring
+
+            blackbox-exporter:
+              image: prom/blackbox-exporter:{{ blackbox_version }}
+              container_name: blackbox-exporter
+              restart: unless-stopped
+              command:
+                - '--config.file=/etc/blackbox/blackbox.yml'
+              ports:
+                - "127.0.0.1:9115:9115"
+              volumes:
+                - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
               networks:
                 - monitoring
 
@@ -164,11 +329,15 @@
               restart: unless-stopped
               ports:
                 - "{{ grafana_port }}:3000"
+              env_file:
+                - ./grafana.env
               environment:
-                - GF_SECURITY_ADMIN_USER=admin
-                - GF_SECURITY_ADMIN_PASSWORD=admin
                 - GF_INSTALL_PLUGINS=grafana-piechart-panel
-                - GF_SERVER_ROOT_URL=http://monitoring.homelab.local:3000
+                - GF_SERVER_ROOT_URL={{ grafana_root_url }}
+                - GF_USERS_ALLOW_SIGN_UP=false
+                - GF_AUTH_ANONYMOUS_ENABLED=false
+                - GF_ANALYTICS_REPORTING_ENABLED=false
+                - GF_ANALYTICS_CHECK_FOR_UPDATES=false
               volumes:
                 - ./grafana/data:/var/lib/grafana
                 - ./grafana/dashboards:/var/lib/grafana/dashboards
@@ -210,6 +379,7 @@
         recurse: yes
       loop:
         - "{{ monitoring_dir }}/prometheus/data"
+        - "{{ monitoring_dir }}/alertmanager/data"
 
     - name: Set Grafana data directory permissions
       file:
@@ -219,6 +389,33 @@
         group: "472"
         recurse: yes
 
+    # ---- Validate BEFORE touching the running stack ------------------------------------------
+    - name: Validate Prometheus configuration and alert rules (promtool)
+      command: >-
+        docker run --rm --entrypoint promtool
+        -v {{ monitoring_dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+        -v {{ monitoring_dir }}/prometheus/alerts:/etc/prometheus/alerts:ro
+        prom/prometheus:{{ prometheus_version }}
+        check config /etc/prometheus/prometheus.yml
+      changed_when: false
+
+    - name: Validate Alertmanager configuration and templates (amtool)
+      command: >-
+        docker run --rm --entrypoint amtool
+        -v {{ monitoring_dir }}/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+        -v {{ monitoring_dir }}/alertmanager/templates:/etc/alertmanager/templates:ro
+        -v {{ monitoring_dir }}/alertmanager/secrets:/etc/alertmanager/secrets:ro
+        prom/alertmanager:{{ alertmanager_version }}
+        check-config /etc/alertmanager/alertmanager.yml
+      changed_when: false
+
+    - name: Validate Docker Compose file
+      command: docker-compose config -q
+      args:
+        chdir: "{{ monitoring_dir }}"
+      changed_when: false
+
+    # ---- (Re)start ---------------------------------------------------------------------------
     - name: Check if monitoring stack is running
       shell: docker ps --filter "name=prometheus" --format {% raw %}"{{.Names}}"{% endraw %}
       register: monitoring_running
@@ -246,6 +443,24 @@
       retries: 10
       delay: 5
 
+    - name: Wait for Alertmanager to be ready
+      uri:
+        url: "http://localhost:9093/-/ready"
+        status_code: 200
+      register: alertmanager_status
+      until: alertmanager_status.status == 200
+      retries: 10
+      delay: 5
+
+    - name: Wait for blackbox-exporter to be ready
+      uri:
+        url: "http://localhost:9115/metrics"
+        status_code: 200
+      register: blackbox_status
+      until: blackbox_status.status == 200
+      retries: 10
+      delay: 5
+
     - name: Wait for Grafana to be ready
       uri:
         url: "http://localhost:{{ grafana_port }}/api/health"
@@ -254,6 +469,63 @@
       until: grafana_status.status == 200
       retries: 10
       delay: 5
+
+    # GF_SECURITY_ADMIN_PASSWORD only applies when Grafana first creates its database. On a VM
+    # that already ran with admin/admin the stored password would stay. Reset it explicitly.
+    - name: Apply the Grafana admin password to an existing database
+      command: docker exec -i grafana grafana cli admin reset-admin-password --password-from-stdin
+      args:
+        stdin: "{{ grafana_admin_password }}"
+      register: grafana_pw_reset
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: Explain a failed Grafana password reset
+      debug:
+        msg:
+          - "Could not reset the Grafana admin password automatically (this Grafana build may not support --password-from-stdin)."
+          - "Do it by hand, then re-run: ssh to the VM and run"
+          - "  docker exec -it grafana grafana cli admin reset-admin-password '<new password>'"
+          - "Until then Grafana may still accept the OLD password."
+      when: grafana_pw_reset.rc != 0
+
+    - name: Reload Prometheus to be sure rules and targets are current
+      uri:
+        url: "http://localhost:{{ prometheus_port }}/-/reload"
+        method: POST
+        status_code: 200
+
+    - name: Read loaded alert rule groups
+      uri:
+        url: "http://localhost:{{ prometheus_port }}/api/v1/rules"
+        return_content: yes
+      register: loaded_rules
+      changed_when: false
+
+    - name: Check that the alert rules were loaded
+      assert:
+        that:
+          - loaded_rules.json.data.groups | length >= 5
+        fail_msg: "Prometheus loaded fewer than 5 rule groups. Check /rules and the promtool output above."
+        quiet: true
+
+    - name: Send one test alert to Telegram
+      uri:
+        url: "http://localhost:9093/api/v2/alerts"
+        method: POST
+        body_format: json
+        body:
+          - labels:
+              alertname: PhaseZeroTest
+              severity: warning
+              instance: monitoring-vm
+            annotations:
+              summary: "Test alert from monitoring-setup.yml"
+              description: "If you can read this in the ops group, the Alertmanager to Telegram path works."
+            endsAt: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime((ansible_date_time.epoch | int) + 300, utc=true) }}"
+        status_code: 200
+      when: send_test_alert | bool
 
     - name: Get container status
       shell: docker-compose ps
@@ -267,26 +539,17 @@
         msg:
           - "===== Monitoring Stack Deployed Successfully ====="
           - ""
-          - "Prometheus:"
-          - "  - URL: http://192.168.100.220:{{ prometheus_port }}"
-          - "  - Status: http://192.168.100.220:{{ prometheus_port }}/targets"
-          - "  - Config: {{ monitoring_dir }}/prometheus/prometheus.yml"
-          - "  - Data retention: {{ prometheus_retention }}"
+          - "Prometheus:    http://192.168.100.220:{{ prometheus_port }}  (targets: /targets, rules: /rules, alerts: /alerts)"
+          - "Alertmanager:  http://127.0.0.1:9093 on the VM (loopback only; reach it through Grafana)"
+          - "Grafana:       http://192.168.100.220:{{ grafana_port }} and {{ grafana_root_url }} once tfdevs-infra is applied"
+          - "                user: admin, password: the value of GRAFANA_ADMIN_PASSWORD"
+          - "Heartbeat:     {{ 'configured' if heartbeat_url | length > 0 else 'NOT configured, outages will be silent' }}"
           - ""
-          - "Grafana:"
-          - "  - URL: http://192.168.100.220:{{ grafana_port }}"
-          - "  - Username: admin"
-          - "  - Password: admin (CHANGE THIS!)"
-          - "  - Datasource: Prometheus (pre-configured)"
-          - ""
-          - "Node Exporter:"
-          - "  - Monitoring VM metrics: http://192.168.100.220:9100/metrics"
-          - ""
-          - "Next Steps:"
-          - "  1. Access Grafana and change admin password"
-          - "  2. Import dashboards (recommended: 1860, 3662, 11074)"
-          - "  3. Deploy node-exporter on other VMs for full monitoring"
-          - "  4. Configure alerting in Prometheus"
+          - "Next:"
+          - "  1. ansible-playbook playbooks/kubernetes/kube-state-metrics-setup.yml  (if not done)"
+          - "  2. ansible-playbook playbooks/services/node-exporter-setup.yml         (if k8s-nodes targets are down)"
+          - "  3. Re-run with -e send_test_alert=true to confirm Telegram delivery"
+          - "  4. docs/monitoring-phase0.md: verification steps"
           - ""
           - "Container Status:"
           - "{{ containers_status.stdout_lines }}"
@@ -295,5 +558,5 @@
           - "  cd {{ monitoring_dir }}"
           - "  docker-compose logs -f        # View logs"
           - "  docker-compose restart        # Restart all"
-          - "  docker-compose down          # Stop all"
-          - "  docker-compose up -d         # Start all"
+          - "  docker-compose down           # Stop all"
+          - "  docker-compose up -d          # Start all"

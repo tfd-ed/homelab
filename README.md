@@ -79,7 +79,7 @@ This homelab runs on Proxmox VE and uses Infrastructure as Code (Terraform + Ans
 | k8s-worker-2 | 192.168.100.203 | 6 | 10 GB | 150 GB | Kubernetes worker node |
 | database-vm | 192.168.100.205 | 4 | 6 GB | 200 GB | Centralized database server |
 | app-gateway | 192.168.100.210 | 2 | 2 GB | 20 GB | Nginx reverse proxy |
-| monitoring | 192.168.100.220 | 2 | 6 GB | 80 GB | Prometheus, Grafana, Loki |
+| monitoring | 192.168.100.220 | 2 | 6 GB | 80 GB | Prometheus, Alertmanager, Grafana (Loki planned) |
 | n8n | 192.168.100.230 | 2 | 4 GB | 50 GB | n8n workflow automation |
 | ci-cd | 192.168.100.240 | 4 | 10 GB | 100 GB | GitHub Actions + Docker registry |
 | ai-vm | 192.168.100.250 | 4 | 6 GB | 20 GB | Ollama + TinyLlama 1.1B |
@@ -294,11 +294,14 @@ This playbook will:
 - Install kubectl and helm for Kubernetes deployments
 
 ## 7. Setup Monitoring Stack
-This will install Prometheus, Grafana, and Loki on the monitoring VM and configure them to monitor your Kubernetes cluster and other services.
+This installs Prometheus, Alertmanager (Telegram alerts), blackbox-exporter and Grafana on the monitoring VM and configures them to monitor your Kubernetes cluster, VMs and the public sites. Loki (log search) is planned but **not installed yet**.
+
+Set the secrets first (copy `ansible/.env.example` to `ansible/.env`): `GRAFANA_ADMIN_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OPS_CHAT_ID`, and ideally `HEARTBEAT_URL`. Full runbook, alert catalogue and verification: [docs/monitoring-phase0.md](docs/monitoring-phase0.md).
 
 ```bash
-# Deploy Prometheus + Grafana on the monitoring VM
 cd ansible
+set -a && . ./.env && set +a
+ansible-playbook playbooks/kubernetes/kube-state-metrics-setup.yml
 ansible-playbook playbooks/services/monitoring-setup.yml
 ansible-playbook playbooks/services/monitoring-dashboards-setup.yml
 ```
@@ -314,10 +317,15 @@ ansible-playbook playbooks/services/node-exporter-setup.yml
 | Job | Endpoint | Notes |
 |---|---|---|
 | `prometheus` | `localhost:9090` | Self-monitoring |
+| `alertmanager` | `alertmanager:9093` | Alert routing |
+| `blackbox-exporter` | `blackbox-exporter:9115` | Probe engine |
 | `node-exporter-monitoring` | `node-exporter:9100` | Monitoring VM metrics |
 | `k8s-nodes` | `192.168.100.201-203:9100` | Requires `node-exporter-setup.yml` on k8s nodes |
+| `kube-state-metrics` | `192.168.100.202:30686` | Requires `kube-state-metrics-setup.yml` |
 | `postgres` | `192.168.100.205:9187` | postgres-exporter sidecar on database VM |
 | `docker-registry` | `192.168.100.240:5001` | Registry debug/metrics port (not port 5000) |
+| `blackbox-http` | public URLs | tfdevs.com, api, dev, api-dev, plausible through Cloudflare |
+| `blackbox-tcp` | VM SSH, DB ports, ingress NodePort, registry | Pinpoints which hop failed |
 
 ## 8. Setup AI VM (Ollama + TinyLlama)
 

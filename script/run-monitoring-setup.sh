@@ -48,6 +48,8 @@ cd "$SCRIPT_DIR/.."
 # Run the monitoring setup playbook
 echo -e "${YELLOW}Deploying Prometheus + Grafana monitoring stack...${NC}"
 cd ansible
+# Secrets (GRAFANA_ADMIN_PASSWORD, TELEGRAM_BOT_TOKEN, TELEGRAM_OPS_CHAT_ID, HEARTBEAT_URL) come from ansible/.env
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
 ansible-playbook playbooks/services/monitoring-setup.yml
 
 if [ $? -eq 0 ]; then
@@ -62,7 +64,9 @@ if [ $? -eq 0 ]; then
     echo ""
     echo -e "${GREEN}Grafana Credentials:${NC}"
     echo -e "  Username: ${YELLOW}admin${NC}"
-    echo -e "  Password: ${YELLOW}admin${NC} ${RED}(CHANGE THIS!)${NC}"
+    echo -e "  Password: the value of ${YELLOW}GRAFANA_ADMIN_PASSWORD${NC} in ansible/.env"
+    echo ""
+    echo -e "${GREEN}Next:${NC} see docs/monitoring-phase0.md (verification, external heartbeat)"
     echo ""
     echo -e "${YELLOW}Recommended Grafana Dashboards:${NC}"
     echo "  - 1860: Node Exporter Full"

@@ -1,0 +1,18 @@
+{{/*
+  Telegram message layout (HTML parse mode). Deployed verbatim (`copy`), not through Jinja.
+  Every dynamic value goes through `html`, because Telegram rejects a message whose text
+  contains a raw < or & outside a tag.
+*/}}
+{{ define "tfd.telegram.alert" -}}
+{{ if eq .Status "firing" }}{{ if eq .Labels.severity "critical" }}🚨{{ else }}⚠️{{ end }}{{ else }}✅{{ end }} <b>{{ if eq .Status "firing" }}{{ .Labels.severity | toUpper | html }}{{ else }}RESOLVED{{ end }}</b> · <b>{{ .Labels.alertname | html }}</b>
+{{ .Annotations.summary | html }}
+{{ if .Annotations.description }}{{ .Annotations.description | html }}
+{{ end }}{{ if .Labels.instance }}Target: <code>{{ .Labels.instance | html }}</code>
+{{ end }}Since: <code>{{ .StartsAt.Format "15:04:05 MST, 02 Jan" }}</code>{{ if .Annotations.runbook }}
+Runbook: <code>{{ .Annotations.runbook | html }}</code>{{ end }}
+{{ end }}
+
+{{ define "tfd.telegram.message" -}}
+{{ range .Alerts }}{{ template "tfd.telegram.alert" . }}
+{{ end }}
+{{- end }}

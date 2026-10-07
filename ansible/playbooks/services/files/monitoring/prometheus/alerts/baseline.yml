@@ -1,0 +1,282 @@
+# Baseline alert rules (observability plan, Phase 0).
+#
+# Deployed verbatim by playbooks/services/monitoring-setup.yml (`copy`, not `template`, so the
+# Go-template braces below are never touched by Jinja). Validate before deploying with:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 check rules /w/baseline.yml
+#
+# Severity convention (routed in alertmanager.yml.j2):
+#   critical -> pages the ops group, repeats hourly
+#   warning  -> posts to the ops group, repeats every 4 hours
+#   none     -> Watchdog only; goes to the external dead-man's switch, never to Telegram
+#
+# Probe alerts take `severity` from the target's own label (see blackbox_*_targets in the playbook),
+# so a failing dev site is a warning while a failing prod site is critical.
+
+groups:
+  # ---------------------------------------------------------------------------
+  # Meta: is the monitoring pipeline itself alive?
+  # ---------------------------------------------------------------------------
+  - name: meta
+    rules:
+      # Always firing. Alertmanager forwards it to the external heartbeat; when the pings stop,
+      # the external service tells you the homelab (or this stack) is down.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Watchdog: monitoring pipeline is alive"
+          description: "Always firing by design. Routed to the external heartbeat only."
+
+      - alert: ScrapeTargetDown
+        expr: up{job=~"alertmanager|blackbox-exporter|node-exporter-monitoring|k8s-nodes|kube-state-metrics|postgres"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target down: {{ $labels.job }} {{ $labels.instance }}"
+          description: "Prometheus cannot scrape {{ $labels.instance }} (job {{ $labels.job }}) for 3 minutes. If this fires right after the first deploy for k8s-nodes, run playbooks/services/node-exporter-setup.yml; for kube-state-metrics, run playbooks/kubernetes/kube-state-metrics-setup.yml."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#scrapetargetdown"
+
+      - alert: PrometheusRuleEvaluationFailing
+        expr: increase(prometheus_rule_evaluation_failures_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus rule evaluation is failing"
+          description: "Some alert rules failed to evaluate in the last 10 minutes, so those alerts may be silent. Check Prometheus /rules."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#prometheusruleevaluationfailing"
+
+      - alert: AlertmanagerNotificationsFailing
+        expr: increase(alertmanager_notifications_failed_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager cannot deliver {{ $labels.integration }} notifications"
+          description: "Alertmanager failed to send {{ $labels.integration }} notifications in the last 10 minutes. Check the bot token, chat id and outbound connectivity to api.telegram.org."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#alertmanagernotificationsfailing"
+
+  # ---------------------------------------------------------------------------
+  # Availability: what users and dependants actually experience
+  # ---------------------------------------------------------------------------
+  - name: availability
+    rules:
+      - alert: HttpProbeFailed
+        expr: probe_success{job="blackbox-http"} == 0
+        for: 2m
+        annotations:
+          summary: "{{ $labels.probe }} ({{ $labels.env }}) is down"
+          description: "{{ $labels.instance }} has failed its HTTP probe for 2 minutes. The probe goes out through Cloudflare, so this covers DNS, the tunnel, the gateway, the ingress and the app."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#httpprobefailed"
+
+      - alert: HttpProbeSlow
+        expr: probe_duration_seconds{job="blackbox-http"} > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.probe }} ({{ $labels.env }}) is slow"
+          description: "{{ $labels.instance }} has taken more than 3 s to respond for 10 minutes (currently {{ $value | humanizeDuration }})."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#httpprobeslow"
+
+      - alert: TcpProbeFailed
+        expr: probe_success{job="blackbox-tcp"} == 0
+        for: 2m
+        annotations:
+          summary: "{{ $labels.name }} {{ $labels.probe }} is unreachable"
+          description: "TCP connect to {{ $labels.instance }} ({{ $labels.name }}, {{ $labels.probe }}) has failed for 2 minutes. If every VM fails at once, suspect the Proxmox host, the switch or power, not the VMs."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#tcpprobefailed"
+
+      - alert: TlsCertificateExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="blackbox-http"} - time()) < 14 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires soon"
+          description: "The certificate served for {{ $labels.instance }} expires in {{ $value | humanizeDuration }}. This is the Cloudflare edge certificate; check the zone's SSL settings."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#tlscertificateexpiringsoon"
+
+      - alert: TlsCertificateExpiryImminent
+        expr: (probe_ssl_earliest_cert_expiry{job="blackbox-http"} - time()) < 3 * 86400
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires within 3 days"
+          description: "The certificate served for {{ $labels.instance }} expires in {{ $value | humanizeDuration }}."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#tlscertificateexpiryimminent"
+
+  # ---------------------------------------------------------------------------
+  # Hosts (node-exporter on the monitoring VM and the three K3s nodes)
+  # ---------------------------------------------------------------------------
+  - name: hosts
+    rules:
+      - alert: HostMemoryHigh
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory above 90% on {{ $labels.instance }}"
+          description: "{{ $labels.instance }} has used more than 90% of its memory for 15 minutes (now {{ $value | humanizePercentage }})."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#hostmemoryhigh"
+
+      - alert: HostCpuHigh
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU above 90% on {{ $labels.instance }}"
+          description: "{{ $labels.instance }} has been above 90% CPU for 20 minutes (now {{ $value | printf \"%.0f\" }}%)."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#hostcpuhigh"
+
+      - alert: HostDiskSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs",mountpoint!~"/(sys|proc|dev|run|boot/efi).*"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs",mountpoint!~"/(sys|proc|dev|run|boot/efi).*"} < 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk below 15% free on {{ $labels.instance }} {{ $labels.mountpoint }}"
+          description: "{{ $labels.mountpoint }} on {{ $labels.instance }} has {{ $value | humanizePercentage }} free."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#hostdiskspacelow"
+
+      - alert: HostDiskSpaceCritical
+        expr: |
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs",mountpoint!~"/(sys|proc|dev|run|boot/efi).*"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs",mountpoint!~"/(sys|proc|dev|run|boot/efi).*"} < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk below 5% free on {{ $labels.instance }} {{ $labels.mountpoint }}"
+          description: "{{ $labels.mountpoint }} on {{ $labels.instance }} has {{ $value | humanizePercentage }} free. Databases and containers will start failing writes."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#hostdiskspacecritical"
+
+      - alert: HostDiskWillFillIn24h
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs",mountpoint!~"/(sys|proc|dev|run|boot/efi).*"}[6h], 24 * 3600) < 0
+          and
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs",mountpoint!~"/(sys|proc|dev|run|boot/efi).*"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*|nsfs|ramfs|devtmpfs",mountpoint!~"/(sys|proc|dev|run|boot/efi).*"} < 0.4
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.instance }} will fill within 24 hours"
+          description: "At the rate of the last 6 hours, {{ $labels.mountpoint }} on {{ $labels.instance }} runs out of space within a day."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#hostdiskwillfillin24h"
+
+      - alert: HostOomKillDetected
+        expr: increase(node_vmstat_oom_kill[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "OOM killer fired on {{ $labels.instance }}"
+          description: "The kernel killed a process for lack of memory on {{ $labels.instance }} in the last 10 minutes."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#hostoomkilldetected"
+
+  # ---------------------------------------------------------------------------
+  # Kubernetes (kube-state-metrics, scraped through its NodePort)
+  # ---------------------------------------------------------------------------
+  - name: kubernetes
+    rules:
+      - alert: KubeNodeNotReady
+        expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kubernetes node {{ $labels.node }} is not Ready"
+          description: "Node {{ $labels.node }} has not been Ready for 3 minutes. Pods on it are not serving."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#kubenodenotready"
+
+      - alert: KubePodCrashLoopingProd
+        expr: max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",namespace=~"prod|ingress-nginx"}[5m]) >= 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} is crash-looping"
+          description: "Container {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }} has been in CrashLoopBackOff for 5 minutes."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#kubepodcrashlooping"
+
+      - alert: KubePodCrashLoopingOther
+        expr: max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff",namespace!~"prod|ingress-nginx|kube-system"}[5m]) >= 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} is crash-looping"
+          description: "Container {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }} has been in CrashLoopBackOff for 10 minutes."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#kubepodcrashlooping"
+
+      - alert: KubePodNotReadyProd
+        expr: sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown|Failed",namespace=~"prod|ingress-nginx"}) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} is not running"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has been Pending, Unknown or Failed for 10 minutes."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#kubepodnotready"
+
+      - alert: KubePodNotReadyOther
+        expr: sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown|Failed",namespace!~"prod|ingress-nginx|kube-system"}) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} is not running"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has been Pending, Unknown or Failed for 15 minutes."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#kubepodnotready"
+
+      - alert: KubeDeploymentReplicasMismatchProd
+        expr: kube_deployment_spec_replicas{namespace=~"prod|ingress-nginx"} != kube_deployment_status_replicas_available{namespace=~"prod|ingress-nginx"}
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.deployment }} has fewer replicas than desired"
+          description: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has not had all desired replicas available for 10 minutes. A normal rolling update finishes well inside that window."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#kubedeploymentreplicasmismatch"
+
+      - alert: KubeDeploymentReplicasMismatchOther
+        expr: kube_deployment_spec_replicas{namespace!~"prod|ingress-nginx|kube-system"} != kube_deployment_status_replicas_available{namespace!~"prod|ingress-nginx|kube-system"}
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.deployment }} has fewer replicas than desired"
+          description: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has not had all desired replicas available for 20 minutes."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#kubedeploymentreplicasmismatch"
+
+      - alert: KubeContainerOOMKilled
+        expr: |
+          (increase(kube_pod_container_status_restarts_total[15m]) > 0)
+          and on (namespace, pod, container)
+          (kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1)
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} was OOM-killed"
+          description: "Container {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }} restarted after running out of memory. Raise its memory limit or find the leak."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#kubecontaineroomkilled"
+
+  # ---------------------------------------------------------------------------
+  # Data stores
+  # ---------------------------------------------------------------------------
+  - name: databases
+    rules:
+      - alert: PostgresDown
+        expr: pg_up{job="postgres"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down on {{ $labels.instance }}"
+          description: "The Postgres exporter on {{ $labels.instance }} reports the database is not reachable for 2 minutes. Plausible depends on it."
+          runbook: "homelab-journey/docs/monitoring-phase0.md#postgresdown"

@@ -1,0 +1,22 @@
+# blackbox-exporter modules (observability plan, Phase 0).
+modules:
+  # Public HTTPS check. Probes leave the homelab, so they travel the real user path:
+  # Cloudflare -> tunnel -> gateway -> ingress -> app.
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: []   # any 2xx
+      follow_redirects: true
+      fail_if_not_ssl: true
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+
+  # Plain TCP connect: SSH on VMs, database ports, the ingress NodePort, the registry.
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
