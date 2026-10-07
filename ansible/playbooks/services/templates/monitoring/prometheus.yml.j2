@@ -28,6 +28,25 @@ scrape_configs:
     static_configs:
       - targets: ['blackbox-exporter:9115']
 
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+
+  # Alloy log shippers: their own metrics feed the "log shipping stalled" alert.
+  - job_name: 'alloy-k8s'
+    static_configs:
+      - targets:
+{% for t in alloy_k8s_targets %}
+          - '{{ t }}'
+{% endfor %}
+
+  - job_name: 'alloy-gateway'
+    static_configs:
+      - targets:
+{% for t in alloy_gateway_targets %}
+          - '{{ t }}'
+{% endfor %}
+
   # Node Exporter - Monitoring VM
   - job_name: 'node-exporter-monitoring'
     static_configs:

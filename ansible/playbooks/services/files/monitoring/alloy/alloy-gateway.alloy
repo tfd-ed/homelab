@@ -1,0 +1,52 @@
+// Grafana Alloy on the gateway VM: ship the Nginx Proxy Manager JSON access log to Loki
+// (observability plan, Phase 1). Deployed by playbooks/networking/gateway-logging-setup.yml.
+// The log is written by the custom nginx config that playbook installs (format `tfd_json`).
+
+logging {
+  level  = "warn"
+  format = "logfmt"
+}
+
+local.file_match "npm" {
+  path_targets = [{
+    __path__  = "/npm-logs/tfd_access.log",
+    namespace = "gateway",
+    app       = "npm",
+    env       = "edge",
+  }]
+}
+
+loki.source.file "npm" {
+  targets    = local.file_match.npm.targets
+  forward_to = [loki.process.npm.receiver]
+}
+
+loki.process "npm" {
+  forward_to = [loki.write.loki.receiver]
+
+  stage.match {
+    selector = "{app=\"npm\"} |~ \"^[{]\""
+
+    stage.json {
+      expressions = {
+        level = "level",
+      }
+    }
+
+    stage.labels {
+      values = {
+        level = "",
+      }
+    }
+  }
+
+  stage.label_keep {
+    values = ["namespace", "app", "env", "level"]
+  }
+}
+
+loki.write "loki" {
+  endpoint {
+    url = sys.env("LOKI_URL")
+  }
+}

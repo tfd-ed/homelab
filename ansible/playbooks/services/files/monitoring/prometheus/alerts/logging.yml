@@ -1,0 +1,46 @@
+# Log pipeline alerts (observability plan, Phase 1). Deployed with the other rule files.
+groups:
+  - name: logging
+    rules:
+      # Alloy on the workers collectively sent nothing for 15 minutes. Traffic from the blackbox
+      # probes alone produces ingress and app log lines every minute, so silence means the
+      # pipeline is broken, not that the site is quiet.
+      - alert: LogShippingStalledK8s
+        expr: sum(rate(loki_write_sent_entries_total{job="alloy-k8s"}[10m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No Kubernetes logs reaching Loki"
+          description: "Alloy on the K3s workers has sent no log lines to Loki for 15 minutes. Check `kubectl -n monitoring get pods -l app.kubernetes.io/name=alloy` and `docker logs loki` on the monitoring VM."
+          runbook: "homelab-journey/docs/monitoring-phase1.md#logshippingstalled"
+
+      - alert: LogShippingStalledGateway
+        expr: sum(rate(loki_write_sent_entries_total{job="alloy-gateway"}[10m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No gateway (NPM) logs reaching Loki"
+          description: "Alloy on the gateway VM has sent no log lines for 15 minutes. Check `docker logs alloy` on the gateway VM and that /data/logs/tfd_access.log is growing."
+          runbook: "homelab-journey/docs/monitoring-phase1.md#logshippingstalled"
+
+      - alert: LogEntriesDropped
+        expr: sum by (job) (rate(loki_write_dropped_entries_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alloy is dropping log lines ({{ $labels.job }})"
+          description: "Alloy gave up delivering some log lines to Loki. Loki may be down, slow or rejecting them."
+          runbook: "homelab-journey/docs/monitoring-phase1.md#logentriesdropped"
+
+      - alert: LokiRejectingLogs
+        expr: sum by (reason) (rate(loki_discarded_samples_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loki is discarding log lines ({{ $labels.reason }})"
+          description: "Loki rejects incoming lines (reason {{ $labels.reason }}): usually rate limits or lines older than 7 days. See the limits in loki-config.yml."
+          runbook: "homelab-journey/docs/monitoring-phase1.md#lokirejectinglogs"

@@ -1,6 +1,7 @@
 ---
 # Monitoring stack on the monitoring VM: Prometheus, Alertmanager (Telegram), blackbox-exporter,
-# Grafana, node-exporter.  (Observability plan, Phase 0: alerts, probes, external heartbeat.)
+# Loki (logs), Grafana, node-exporter.
+# Observability plan: Phase 0 (alerts, probes, external heartbeat) and Phase 1 (logs, Requests dashboard).
 #
 # Required environment variables on the machine running ansible (see ansible/.env.example):
 #   GRAFANA_ADMIN_PASSWORD   at least 12 characters of A-Z a-z 0-9 . _ @ % + = -   (never "admin")
@@ -25,6 +26,7 @@
     prometheus_version: "v2.48.1"
     alertmanager_version: "v0.28.1"      # telegram_configs with bot_token_file / message_thread_id
     blackbox_version: "v0.25.0"
+    loki_version: "3.4.2"
     grafana_version: "10.2.3"
     prometheus_port: 9090
     grafana_port: 3000
@@ -47,6 +49,13 @@
       - 192.168.100.201
       - 192.168.100.202
       - 192.168.100.203
+    # Alloy's own metrics (hostPort 12345 on the workers, and on the gateway VM): log-shipping alert.
+    alloy_k8s_targets:
+      - 192.168.100.202:12345
+      - 192.168.100.203:12345
+    alloy_gateway_targets:
+      - 192.168.100.210:12345
+
     # kube-state-metrics NodePort (kubernetes/kube-state-metrics-setup.yml). One node only.
     kube_state_metrics_target: "192.168.100.202:30686"
 
@@ -131,6 +140,7 @@
         - "{{ monitoring_dir }}/alertmanager"
         - "{{ monitoring_dir }}/alertmanager/templates"
         - "{{ monitoring_dir }}/blackbox"
+        - "{{ monitoring_dir }}/loki"
         - "{{ monitoring_dir }}/grafana"
         - "{{ monitoring_dir }}/grafana/data"
         - "{{ monitoring_dir }}/grafana/provisioning"
@@ -187,6 +197,21 @@
         dest: "{{ monitoring_dir }}/alertmanager/templates/telegram.tmpl"
         mode: "0644"
 
+    # ---- Loki --------------------------------------------------------------------------------
+    - name: Create Loki data directory (the Loki image runs as uid 10001)
+      file:
+        path: "{{ monitoring_dir }}/loki/data"
+        state: directory
+        owner: "10001"
+        group: "10001"
+        mode: "0755"
+
+    - name: Install Loki configuration
+      copy:
+        src: "{{ playbook_dir }}/files/monitoring/loki/loki-config.yml"
+        dest: "{{ monitoring_dir }}/loki/loki-config.yml"
+        mode: "0644"
+
     # ---- blackbox-exporter -------------------------------------------------------------------
     - name: Install blackbox-exporter modules
       copy:
@@ -218,9 +243,25 @@
             - name: Prometheus
               type: prometheus
               access: proxy
+              uid: prometheus
               url: http://prometheus:9090
               isDefault: true
               editable: true
+            - name: Loki
+              type: loki
+              uid: loki
+              access: proxy
+              url: http://loki:3100
+              editable: true
+              jsonData:
+                maxLines: 1000
+                # Turns every requestId in a log line into a link that opens all lines with that id.
+                derivedFields:
+                  - name: requestId
+                    matcherRegex: '"requestId":"([A-Za-z0-9._-]+)"'
+                    url: '{env=~".+"} |= "$${__value.raw}"'
+                    datasourceUid: loki
+                    urlDisplayLabel: All lines for this request
             - name: Alertmanager
               type: alertmanager
               access: proxy
@@ -246,6 +287,12 @@
               allowUiUpdates: true
               options:
                 path: /etc/grafana/provisioning/dashboards
+        mode: "0644"
+
+    - name: Install the Requests dashboard
+      copy:
+        src: "{{ playbook_dir }}/files/monitoring/grafana/dashboards/tfd-requests.json"
+        dest: "{{ monitoring_dir }}/grafana/provisioning/dashboards/tfd-requests.json"
         mode: "0644"
 
     - name: Write Grafana environment file (admin password lives here, not in docker-compose.yml)
@@ -323,6 +370,24 @@
               networks:
                 - monitoring
 
+            loki:
+              image: grafana/loki:{{ loki_version }}
+              container_name: loki
+              restart: unless-stopped
+              command:
+                - '-config.file=/etc/loki/config.yml'
+              environment:
+                # Soft memory ceiling: the VM has 6 GB shared with Prometheus and Grafana.
+                - GOMEMLIMIT=768MiB
+              ports:
+                # LAN: Alloy on the K3s workers and on the gateway VM pushes here. No auth, keep it on the LAN.
+                - "3100:3100"
+              volumes:
+                - ./loki/loki-config.yml:/etc/loki/config.yml:ro
+                - ./loki/data:/loki
+              networks:
+                - monitoring
+
             grafana:
               image: grafana/grafana:{{ grafana_version }}
               container_name: grafana
@@ -346,6 +411,7 @@
                 - monitoring
               depends_on:
                 - prometheus
+                - loki
 
             node-exporter:
               image: prom/node-exporter:latest
@@ -409,6 +475,14 @@
         check-config /etc/alertmanager/alertmanager.yml
       changed_when: false
 
+    - name: Validate Loki configuration
+      command: >-
+        docker run --rm
+        -v {{ monitoring_dir }}/loki/loki-config.yml:/etc/loki/config.yml:ro
+        grafana/loki:{{ loki_version }}
+        -config.file=/etc/loki/config.yml -verify-config
+      changed_when: false
+
     - name: Validate Docker Compose file
       command: docker-compose config -q
       args:
@@ -451,6 +525,15 @@
       until: alertmanager_status.status == 200
       retries: 10
       delay: 5
+
+    - name: Wait for Loki to be ready
+      uri:
+        url: "http://localhost:3100/ready"
+        status_code: 200
+      register: loki_status
+      until: loki_status.status == 200
+      retries: 20
+      delay: 6
 
     - name: Wait for blackbox-exporter to be ready
       uri:
@@ -541,6 +624,7 @@
           - ""
           - "Prometheus:    http://192.168.100.220:{{ prometheus_port }}  (targets: /targets, rules: /rules, alerts: /alerts)"
           - "Alertmanager:  http://127.0.0.1:9093 on the VM (loopback only; reach it through Grafana)"
+          - "Loki:          http://192.168.100.220:3100 (LAN; ingestion by Alloy, query through Grafana)"
           - "Grafana:       http://192.168.100.220:{{ grafana_port }} and {{ grafana_root_url }} once tfdevs-infra is applied"
           - "                user: admin, password: the value of GRAFANA_ADMIN_PASSWORD"
           - "Heartbeat:     {{ 'configured' if heartbeat_url | length > 0 else 'NOT configured, outages will be silent' }}"
@@ -550,6 +634,7 @@
           - "  2. ansible-playbook playbooks/services/node-exporter-setup.yml         (if k8s-nodes targets are down)"
           - "  3. Re-run with -e send_test_alert=true to confirm Telegram delivery"
           - "  4. docs/monitoring-phase0.md: verification steps"
+          - "  5. Logs (Phase 1): playbooks/kubernetes/alloy-setup.yml, playbooks/networking/gateway-logging-setup.yml, then docs/monitoring-phase1.md"
           - ""
           - "Container Status:"
           - "{{ containers_status.stdout_lines }}"

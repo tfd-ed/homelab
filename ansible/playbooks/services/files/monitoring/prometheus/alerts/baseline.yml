@@ -29,13 +29,13 @@ groups:
           description: "Always firing by design. Routed to the external heartbeat only."
 
       - alert: ScrapeTargetDown
-        expr: up{job=~"alertmanager|blackbox-exporter|node-exporter-monitoring|k8s-nodes|kube-state-metrics|postgres"} == 0
+        expr: up{job=~"alertmanager|blackbox-exporter|loki|alloy-k8s|alloy-gateway|node-exporter-monitoring|k8s-nodes|kube-state-metrics|postgres"} == 0
         for: 3m
         labels:
           severity: critical
         annotations:
           summary: "Scrape target down: {{ $labels.job }} {{ $labels.instance }}"
-          description: "Prometheus cannot scrape {{ $labels.instance }} (job {{ $labels.job }}) for 3 minutes. If this fires right after the first deploy for k8s-nodes, run playbooks/services/node-exporter-setup.yml; for kube-state-metrics, run playbooks/kubernetes/kube-state-metrics-setup.yml."
+          description: "Prometheus cannot scrape {{ $labels.instance }} (job {{ $labels.job }}) for 3 minutes. If this fires right after the first deploy for k8s-nodes, run playbooks/services/node-exporter-setup.yml; for kube-state-metrics, run playbooks/kubernetes/kube-state-metrics-setup.yml; for alloy-k8s run playbooks/kubernetes/alloy-setup.yml, for alloy-gateway run playbooks/networking/gateway-logging-setup.yml."
           runbook: "homelab-journey/docs/monitoring-phase0.md#scrapetargetdown"
 
       - alert: PrometheusRuleEvaluationFailing
