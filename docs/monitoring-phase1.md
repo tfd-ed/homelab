@@ -85,6 +85,8 @@ Alloy gave up delivering lines. Usually Loki was down or overloaded for a while;
 ### LokiRejectingLogs
 Loki discards lines: `ingestion_rate_limit_exceeded` / `per_stream_rate_limit` (a chatty pod; check its log level) or `greater_than_max_sample_age` (lines older than 7 days). Limits are in `files/monitoring/loki/loki-config.yml`.
 
+Expect this alert and a burst of `HTTP status 400 ... timestamp too old` / `entry too far behind` errors in `kubectl -n monitoring logs ds/alloy` **once, right after the first Alloy start**: Alloy reads the log files that already exist on each worker from the beginning, and Loki refuses lines older than 7 days or far behind the newest line of the stream. Those lines are old backlog and are dropped on purpose. It stops by itself once the backlog is read (positions are then saved); if the errors keep coming 10 minutes later, treat it as real.
+
 ## Notes and limits
 
 - **Loki is unauthenticated on the LAN** (`:3100`), like Prometheus and node-exporter. Anyone on the LAN can read or write logs. Do not publish it through the tunnel or the gateway. Grafana (behind Cloudflare Access) is the human way in.

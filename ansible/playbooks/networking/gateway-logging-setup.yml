@@ -43,14 +43,14 @@
 
         - name: Install http_top.conf (log format)
           copy:
-            src: "{{ playbook_dir }}/networking/files/npm-http_top.conf"
+            src: "{{ playbook_dir }}/files/npm-http_top.conf"
             dest: "{{ custom_dir }}/http_top.conf"
             mode: "0644"
           register: http_top
 
         - name: Install server_proxy.conf (access_log for every proxy host)
           copy:
-            src: "{{ playbook_dir }}/networking/files/npm-server_proxy.conf"
+            src: "{{ playbook_dir }}/files/npm-server_proxy.conf"
             dest: "{{ custom_dir }}/server_proxy.conf"
             mode: "0644"
           register: server_proxy
@@ -63,7 +63,7 @@
           command: docker exec {{ npm_container }} nginx -s reload
           when: http_top.changed or server_proxy.changed
       rescue:
-        - name: Remove the snippets again, nginx rejected them
+        - name: Remove the snippets again, the install failed
           file:
             path: "{{ custom_dir }}/{{ item }}"
             state: absent
@@ -74,8 +74,9 @@
         - name: Stop here
           fail:
             msg: >-
-              nginx -t failed, so the custom snippets were removed and NPM is unchanged.
-              Run `docker exec {{ npm_container }} nginx -t` to see why.
+              "{{ ansible_failed_task.name }}" failed, so the custom snippets were removed and
+              NPM is unchanged. Reason: {{ ansible_failed_result.msg | default('see the task output above') }}
+              (for an nginx -t failure, run `docker exec {{ npm_container }} nginx -t` to see why).
 
     # ---- Alloy -------------------------------------------------------------------------------
     - name: Create the Alloy directories
@@ -89,7 +90,7 @@
 
     - name: Install the Alloy pipeline
       copy:
-        src: "{{ playbook_dir }}/services/files/monitoring/alloy/alloy-gateway.alloy"
+        src: "{{ playbook_dir }}/../services/files/monitoring/alloy/alloy-gateway.alloy"
         dest: "{{ alloy_dir }}/config.alloy"
         mode: "0644"
       register: alloy_config
