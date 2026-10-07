@@ -1,0 +1,178 @@
+---
+# ============================================================
+# GlitchTip (error tracking) - observability plan, Phase 2
+# ============================================================
+# Play 1: PostgreSQL database + user on database-vm (same pattern as Plausible; the existing nightly
+#         pg_dumpall backup covers it).
+# Play 2: GlitchTip in K3s (namespace glitchtip): one pod, web and worker in one process, no Valkey,
+#         source-map uploads on a small PVC, UI behind the shared ingress.
+#
+# Required env vars:
+#   POSTGRES_PASSWORD       existing postgres superuser password
+#   GLITCHTIP_DB_PASSWORD   password for the glitchtip postgres user
+#   GLITCHTIP_SECRET_KEY    random string, keep it stable (openssl rand -hex 32)
+# Optional env vars:
+#   GLITCHTIP_REGISTRATION  "True" (default, needed once to create the first account) or "False"
+#   GLITCHTIP_EMAIL_URL     smtp://user:pass@host:port; empty prints emails to the pod log
+#
+# Usage:
+#   POSTGRES_PASSWORD=x GLITCHTIP_DB_PASSWORD=y GLITCHTIP_SECRET_KEY=z \
+#     ansible-playbook playbooks/services/glitchtip-setup.yml
+# Then follow docs/monitoring-phase2.md.
+# ============================================================
+
+- name: Create the GlitchTip PostgreSQL database on database-vm
+  hosts: database
+  remote_user: ubuntu
+  become: yes
+
+  vars:
+    glitchtip_db_name: glitchtip_db
+    glitchtip_db_user: glitchtip
+    glitchtip_db_password: "{{ lookup('ansible.builtin.env', 'GLITCHTIP_DB_PASSWORD') }}"
+    postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') }}"
+
+  tasks:
+    - name: Refuse to run without the required passwords
+      assert:
+        that:
+          - glitchtip_db_password | length >= 12
+          - postgres_password | length > 0
+        fail_msg: "Set GLITCHTIP_DB_PASSWORD (12+ chars) and POSTGRES_PASSWORD in the environment."
+
+    - name: Check that the PostgreSQL container is running
+      command: docker inspect -f "{{ '{{' }}.State.Running{{ '}}' }}" postgres
+      register: postgres_container_check
+      changed_when: false
+      failed_when: postgres_container_check.rc != 0 or postgres_container_check.stdout | trim != "true"
+
+    - name: Install python3-psycopg2 for the PostgreSQL modules
+      apt:
+        name: python3-psycopg2
+        state: present
+        update_cache: yes
+
+    - name: Create the GlitchTip database
+      community.postgresql.postgresql_db:
+        name: "{{ glitchtip_db_name }}"
+        encoding: UTF8
+        lc_collate: en_US.UTF-8
+        lc_ctype: en_US.UTF-8
+        template: template0
+        state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
+
+    - name: Create the GlitchTip database user
+      community.postgresql.postgresql_user:
+        name: "{{ glitchtip_db_user }}"
+        password: "{{ glitchtip_db_password }}"
+        state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
+      no_log: true
+
+    - name: Make the GlitchTip user the owner of its database
+      community.postgresql.postgresql_db:
+        name: "{{ glitchtip_db_name }}"
+        owner: "{{ glitchtip_db_user }}"
+        state: present
+        login_host: localhost
+        login_port: 5432
+        login_user: postgres
+        login_password: "{{ postgres_password }}"
+
+- name: Deploy GlitchTip to the K3s cluster
+  hosts: k8s-master
+  become: yes
+  gather_facts: no
+
+  vars:
+    kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+    glitchtip_namespace: glitchtip
+    # Major tag; check https://glitchtip.com/blog/ before moving to a new major.
+    glitchtip_version: "6"
+    glitchtip_domain: errors.tfdevs.com
+    glitchtip_base_url: "https://errors.tfdevs.com"
+    glitchtip_from_email: "glitchtip@tfdevs.com"
+    glitchtip_retention_days: "30"
+    glitchtip_registration: "{{ lookup('ansible.builtin.env', 'GLITCHTIP_REGISTRATION') | default('True', true) }}"
+    glitchtip_email_url: "{{ lookup('ansible.builtin.env', 'GLITCHTIP_EMAIL_URL') | default('', true) }}"
+    glitchtip_db_name: glitchtip_db
+    glitchtip_db_user: glitchtip
+    glitchtip_db_password: "{{ lookup('ansible.builtin.env', 'GLITCHTIP_DB_PASSWORD') }}"
+    glitchtip_secret_key: "{{ lookup('ansible.builtin.env', 'GLITCHTIP_SECRET_KEY') }}"
+    db_host: "192.168.100.205"
+
+  tasks:
+    - name: Refuse to run without the required secrets
+      assert:
+        that:
+          - glitchtip_db_password | length >= 12
+          - glitchtip_secret_key | length >= 32
+          - glitchtip_registration in ['True', 'False']
+        fail_msg: >-
+          Set GLITCHTIP_DB_PASSWORD (12+ chars) and GLITCHTIP_SECRET_KEY (32+ chars, openssl rand -hex 32);
+          GLITCHTIP_REGISTRATION must be True or False.
+
+    - name: Wait for K3s to be ready
+      wait_for:
+        path: "{{ kubeconfig_path }}"
+        state: present
+        timeout: 60
+
+    - name: Create the namespace
+      shell: kubectl create namespace {{ glitchtip_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Render the manifests (contains the secret, so mode 0600)
+      template:
+        src: "{{ playbook_dir }}/templates/glitchtip/glitchtip.yaml.j2"
+        dest: /tmp/glitchtip.yaml
+        mode: "0600"
+      no_log: true
+
+    - name: Apply the manifests
+      shell: kubectl apply -f /tmp/glitchtip.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: gt_apply
+      changed_when: "'configured' in gt_apply.stdout or 'created' in gt_apply.stdout"
+
+    - name: Remove the rendered manifest
+      file:
+        path: /tmp/glitchtip.yaml
+        state: absent
+      changed_when: false
+
+    - name: Wait for the rollout (first start runs the database migrations)
+      shell: kubectl -n {{ glitchtip_namespace }} rollout status deployment/glitchtip --timeout=420s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: The web app answers inside the cluster
+      shell: >-
+        kubectl -n {{ glitchtip_namespace }} exec deploy/glitchtip --
+        python -c "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8000/_health/').status)"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: gt_probe
+      retries: 6
+      delay: 10
+      until: gt_probe.rc == 0 and '200' in gt_probe.stdout
+      changed_when: false
+
+    - name: Summary
+      debug:
+        msg:
+          - "GlitchTip {{ glitchtip_version }} is running in namespace '{{ glitchtip_namespace }}'. UI: {{ glitchtip_base_url }} (needs tfdevs-infra feat/errors-phase2 applied)."
+          - "In-cluster ingest base for the SDKs: http://glitchtip.{{ glitchtip_namespace }}.svc.cluster.local:8000"
+          - "Registration is {{ glitchtip_registration }}. Create your account, then re-run with GLITCHTIP_REGISTRATION=False."
+          - "Next: docs/monitoring-phase2.md (organisation, four projects, DSNs, alert recipient)."
