@@ -1,0 +1,171 @@
+---
+# JSON access log for Nginx Proxy Manager + Grafana Alloy shipping it to Loki
+# (observability plan, Phase 1).
+#
+# What it changes on the gateway VM:
+#   1. Two custom nginx snippets in NPM's data dir (the documented custom-config hooks), checked
+#      with `nginx -t` inside the running container before the reload. If the check fails the
+#      snippets are removed again and NPM keeps running with its previous config.
+#   2. A grafana/alloy container (compose project in /opt/alloy) tailing /data/logs/tfd_access.log.
+#
+# Prerequisite: Loki is running on the monitoring VM.
+# Usage:  ansible-playbook playbooks/networking/gateway-logging-setup.yml
+- name: Ship the gateway's access log to Loki
+  hosts: gateway
+  become: yes
+  gather_facts: yes
+
+  vars:
+    npm_container: nginx-proxy-manager
+    npm_data_dir: /opt/nginx-proxy-manager/data
+    alloy_dir: /opt/alloy
+    alloy_version: "v1.8.1"
+    loki_url: "http://192.168.100.220:3100"
+    custom_dir: "{{ npm_data_dir }}/nginx/custom"
+
+  tasks:
+    - name: Check that Loki answers from the gateway VM
+      uri:
+        url: "{{ loki_url }}/ready"
+        status_code: 200
+      register: loki_ready
+      retries: 3
+      delay: 5
+      until: loki_ready.status == 200
+
+    - name: Install the JSON access log (rolled back automatically if nginx rejects it)
+      block:
+        - name: Create NPM's custom nginx directory
+          file:
+            path: "{{ custom_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Install http_top.conf (log format)
+          copy:
+            src: "{{ playbook_dir }}/networking/files/npm-http_top.conf"
+            dest: "{{ custom_dir }}/http_top.conf"
+            mode: "0644"
+          register: http_top
+
+        - name: Install server_proxy.conf (access_log for every proxy host)
+          copy:
+            src: "{{ playbook_dir }}/networking/files/npm-server_proxy.conf"
+            dest: "{{ custom_dir }}/server_proxy.conf"
+            mode: "0644"
+          register: server_proxy
+
+        - name: Test the nginx configuration inside the NPM container
+          command: docker exec {{ npm_container }} nginx -t
+          changed_when: false
+
+        - name: Reload nginx to start writing the log
+          command: docker exec {{ npm_container }} nginx -s reload
+          when: http_top.changed or server_proxy.changed
+      rescue:
+        - name: Remove the snippets again, nginx rejected them
+          file:
+            path: "{{ custom_dir }}/{{ item }}"
+            state: absent
+          loop:
+            - http_top.conf
+            - server_proxy.conf
+
+        - name: Stop here
+          fail:
+            msg: >-
+              nginx -t failed, so the custom snippets were removed and NPM is unchanged.
+              Run `docker exec {{ npm_container }} nginx -t` to see why.
+
+    # ---- Alloy -------------------------------------------------------------------------------
+    - name: Create the Alloy directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ alloy_dir }}"
+        - "{{ alloy_dir }}/data"
+
+    - name: Install the Alloy pipeline
+      copy:
+        src: "{{ playbook_dir }}/services/files/monitoring/alloy/alloy-gateway.alloy"
+        dest: "{{ alloy_dir }}/config.alloy"
+        mode: "0644"
+      register: alloy_config
+
+    - name: Create the Alloy compose file
+      copy:
+        dest: "{{ alloy_dir }}/docker-compose.yml"
+        content: |
+          services:
+            alloy:
+              image: grafana/alloy:{{ alloy_version }}
+              container_name: alloy
+              restart: unless-stopped
+              # The nginx log files are root-owned.
+              user: "0:0"
+              command:
+                - run
+                - /etc/alloy/config.alloy
+                - --server.http.listen-addr=0.0.0.0:12345
+                - --storage.path=/var/lib/alloy/data
+                - --disable-reporting
+              environment:
+                LOKI_URL: "{{ loki_url }}/loki/api/v1/push"
+              ports:
+                # Prometheus on the monitoring VM scrapes Alloy's own metrics here.
+                - "12345:12345"
+              volumes:
+                - ./config.alloy:/etc/alloy/config.alloy:ro
+                - {{ npm_data_dir }}/logs:/npm-logs:ro
+                - ./data:/var/lib/alloy/data
+        mode: "0644"
+      register: alloy_compose
+
+    - name: Start Alloy
+      community.docker.docker_compose_v2:
+        project_src: "{{ alloy_dir }}"
+        state: present
+        recreate: "{{ 'always' if alloy_compose.changed else 'auto' }}"
+
+    - name: Restart Alloy when only its pipeline changed
+      command: docker restart alloy
+      when: alloy_config.changed and not alloy_compose.changed
+
+    # ---- Prove it end to end -----------------------------------------------------------------
+    - name: Send one request through NPM so there is a line to find
+      uri:
+        url: "http://127.0.0.1/"
+        headers:
+          Host: tfdevs.com
+          CF-Ray: "phase1check-{{ ansible_date_time.epoch }}"
+        status_code: [200, 301, 302, 308, 401, 403, 404, 502, 503]
+        follow_redirects: none
+      register: probe_request
+
+    - name: The access log file has the line
+      shell: grep -c 'phase1check-{{ ansible_date_time.epoch }}' {{ npm_data_dir }}/logs/tfd_access.log
+      register: log_line
+      changed_when: false
+      retries: 5
+      delay: 2
+      until: log_line.stdout | int > 0
+
+    - name: Loki has the line (Alloy shipped it)
+      uri:
+        url: "{{ loki_url }}/loki/api/v1/query_range?query={{ ('{app=\"npm\"} |= \"phase1check-' ~ ansible_date_time.epoch ~ '\"') | urlencode }}&since=15m&limit=5"
+        return_content: yes
+        status_code: 200
+      register: loki_check
+      until: (loki_check.json.data.result | length) > 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: Summary
+      debug:
+        msg:
+          - "Gateway access log: {{ npm_data_dir }}/logs/tfd_access.log (JSON, format tfd_json)."
+          - "Alloy ships it to {{ loki_url }} with labels app=npm env=edge. Find a request with its cfRay."
+          - "If the access log stayed empty: this NPM version may not include server_proxy.conf; see docs/monitoring-phase1.md."
