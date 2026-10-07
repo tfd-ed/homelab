@@ -81,17 +81,18 @@ This homelab runs on Proxmox VE and uses Infrastructure as Code (Terraform + Ans
 | app-gateway | 192.168.100.210 | 2 | 2 GB | 20 GB | Nginx reverse proxy |
 | monitoring | 192.168.100.220 | 2 | 6 GB | 80 GB | Prometheus, Grafana, Loki |
 | n8n | 192.168.100.230 | 2 | 4 GB | 50 GB | n8n workflow automation |
-| ci-cd | 192.168.100.240 | 4 | 8 GB | 100 GB | GitHub Actions + Docker registry |
+| ci-cd | 192.168.100.240 | 4 | 10 GB | 100 GB | GitHub Actions + Docker registry |
 | ai-vm | 192.168.100.250 | 4 | 6 GB | 20 GB | Ollama + TinyLlama 1.1B |
 
-**Total Resources:** 32 CPU cores, 56 GB RAM, 820 GB storage  
-**Available for Host:** ~8 GB RAM (~12.5%), ~180 GB storage
+**Total Resources:** 32 CPU cores, 58 GB RAM, 820 GB storage  
+**Available for Host:** ~6 GB RAM (~9%), ~180 GB storage
 
 **Resource Allocation Notes:**
 - k8s workers reduced to 10 GB each to make room for AI VM
 - n8n reduced to 4 GB (sufficient for workflow automation)
+- ci-cd increased to 10 GB to give Nuxt/NestJS builds and concurrent runner jobs more headroom
 - ai-vm runs Ollama with TinyLlama 1.1B — lightweight LLM inference
-- ~8 GB reserved for Proxmox host ensures stable headroom
+- ~6 GB reserved for Proxmox host (tight, so avoid further VM RAM increases without freeing memory elsewhere)
 - Storage allocation allows for data growth and logs
 
 ## 📂 Repository Structure
@@ -99,14 +100,18 @@ This homelab runs on Proxmox VE and uses Infrastructure as Code (Terraform + Ans
 ```
 homelab-journey/
 ├── terraform/           # Infrastructure provisioning
+│   ├── provider.tf     # Proxmox provider
 │   ├── vms.tf          # VM definitions
-│   ├── variables.tf    # Configurable variables
-│   └── terraform.tfvars # Your configuration
-├── ansible/            # Configuration management (organized)
-│   ├── inventory.ini   # VM inventory
+│   ├── variables.tf    # VM specs (CPU, RAM, disk, IP) and other variables
+│   ├── outputs.tf
+│   └── terraform.tfvars # Your configuration (see terraform.tfvars.example)
+├── ansible/            # Configuration management
+│   ├── inventory.ini.example  # VM inventory template
 │   ├── ansible.cfg     # Ansible configuration
+│   ├── .env.example    # Database passwords etc.
 │   ├── README.md       # Ansible documentation
-│   └── playbooks/      # 🆕 Organized playbooks by category
+│   ├── script/         # dashboard-tunnel.sh
+│   └── playbooks/      # Playbooks organized by category
 │       ├── infrastructure/    # Core infrastructure setup
 │       │   ├── proxmox-setup.yml
 │       │   ├── proxmox-node-server-setup.yml  # Temperature monitor API
@@ -114,27 +119,24 @@ homelab-journey/
 │       │   ├── docker-setup.yml
 │       │   └── nginx-gateway-setup.yml
 │       ├── kubernetes/        # K8s cluster deployment
-│       │   └── k3s-cluster-setup.yml
+│       │   ├── k3s-cluster-setup.yml
+│       │   └── k8s-dashboard-setup.yml
 │       ├── services/          # Application services
 │       │   ├── database-setup.yml
 │       │   ├── monitoring-setup.yml
 │       │   ├── monitoring-dashboards-setup.yml
 │       │   ├── node-exporter-setup.yml
 │       │   ├── n8n-setup.yml
-│       │   └── cicd-setup.yml
+│       │   ├── cicd-setup.yml
+│       │   ├── ai-vm-setup.yml
+│       │   ├── plausible-setup.yml
+│       │   └── minio-*.yml    # MinIO setup / migrate / cleanup
 │       └── networking/        # Network & remote access
 │           ├── cloudflare-tunnel-setup.yml
 │           └── github-runner-setup.yml
-├── script/             # Helper scripts
-│   ├── setup-k8s-complete.sh
-│   ├── setup-cloudflare-tunnel.sh
-│   ├── run-proxmox-node-server-setup.sh  # Temperature server runner
-│   ├── run-monitoring-setup.sh
-│   ├── run-monitoring-dashboards-setup.sh
-│   ├── run-n8n-setup.sh
-│   ├── run-database-setup.sh
-│   ├── generate-ssh-keys.sh
-│   └── cleanup-known-hosts.sh
+├── script/             # Helper scripts (run-*-setup.sh wrappers, SSH key generation,
+│                       #   k8s/Cloudflare setup, MinIO migration, known_hosts cleanup)
+├── docs/               # n8n workflows/agents, MinIO guides, bootcamp registration docs
 ├── diagram/            # Infrastructure diagrams
 ```
 
@@ -592,9 +594,9 @@ sudo iptables -L -n -v
 ### Ansible Playbook Categories
 
 All playbooks are organized in `ansible/playbooks/` by functional category:
-- 🏗️ **[Infrastructure](ansible/playbooks/infrastructure/)** - Proxmox, Docker, Nginx, QEMU agent (4 playbooks)
-- ☸️ **[Kubernetes](ansible/playbooks/kubernetes/)** - K3s cluster deployment (1 playbook)
-- 🚀 **[Services](ansible/playbooks/services/)** - Databases, monitoring, node-exporter, n8n, CI/CD (6 playbooks)
+- 🏗️ **[Infrastructure](ansible/playbooks/infrastructure/)** - Proxmox, Docker, Nginx, QEMU agent (5 playbooks)
+- ☸️ **[Kubernetes](ansible/playbooks/kubernetes/)** - K3s cluster deployment (2 playbooks)
+- 🚀 **[Services](ansible/playbooks/services/)** - Databases, monitoring, node-exporter, n8n, CI/CD, AI VM, Plausible, MinIO (11 playbooks)
 - 🌐 **[Networking](ansible/playbooks/networking/)** - Cloudflare tunnel, GitHub runner (2 playbooks)
 
 
