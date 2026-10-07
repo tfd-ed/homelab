@@ -13,6 +13,10 @@
     registry_port: 5000
     registry_data_dir: /var/lib/docker-registry
 
+    # Secrets decryption (sops + age)
+    sops_version: "3.13.3"
+    age_version: "1.3.1"
+
   tasks:
     - name: Remove broken ookla speedtest-cli repository
       file:
@@ -101,6 +105,29 @@
       args:
         creates: /usr/local/bin/helm
 
+    - name: Install age for sops decryption
+      unarchive:
+        src: "https://github.com/FiloSottile/age/releases/download/v{{ age_version }}/age-v{{ age_version }}-linux-amd64.tar.gz"
+        dest: /tmp
+        remote_src: yes
+        creates: /tmp/age/age
+
+    - name: Install age binaries to /usr/local/bin
+      copy:
+        src: "/tmp/age/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        mode: "0755"
+        remote_src: yes
+      loop:
+        - age
+        - age-keygen
+
+    - name: Install sops for secrets decryption
+      get_url:
+        url: "https://github.com/getsops/sops/releases/download/v{{ sops_version }}/sops-v{{ sops_version }}.linux.amd64"
+        dest: /usr/local/bin/sops
+        mode: "0755"
+
     - name: Create runner user for GitHub Actions
       user:
         name: runner
@@ -139,6 +166,35 @@
       shell: /home/runner/actions-runner/bin/installdependencies.sh
       args:
         creates: /home/runner/actions-runner/.runner
+
+    - name: Create sops/age config directory for runner user
+      file:
+        path: /home/runner/.config/sops/age
+        state: directory
+        owner: runner
+        group: runner
+        mode: "0700"
+
+    - name: Generate age key pair for runner user
+      command: /usr/local/bin/age-keygen -o /home/runner/.config/sops/age/keys.txt
+      args:
+        creates: /home/runner/.config/sops/age/keys.txt
+
+    - name: Secure age private key file
+      file:
+        path: /home/runner/.config/sops/age/keys.txt
+        owner: runner
+        group: runner
+        mode: "0600"
+
+    - name: Read generated age key pair
+      slurp:
+        src: /home/runner/.config/sops/age/keys.txt
+      register: age_keys_file
+
+    - name: Extract age public key
+      set_fact:
+        runner_age_public_key: "{{ (age_keys_file.content | b64decode | regex_search('# public key: (age1[a-z0-9]+)', '\\1'))[0] }}"
 
     - name: Allow ubuntu user to manage runner service
       copy:
@@ -368,7 +424,14 @@
           - "  ✓ Docker Registry on port {{ registry_port }}"
           - "  ✓ kubectl (Kubernetes CLI)"
           - "  ✓ helm (Kubernetes package manager)"
+          - "  ✓ sops v{{ sops_version }} + age v{{ age_version }} (secret decryption)"
           - "  ✓ Build tools (git, nodejs, python3, etc.)"
+          - ""
+          - "Secrets decryption (sops/age):"
+          - "  - Runner's age public key: {{ runner_age_public_key }}"
+          - "  - Private key location: /home/runner/.config/sops/age/keys.txt (runner user only)"
+          - "  - Add the public key above as a recipient in .sops.yaml to let this runner decrypt secrets"
+          - "  - sops auto-discovers the key at ~/.config/sops/age/keys.txt for the runner user"
           - ""
           - "Docker Registry:"
           - "  - URL: registry.homelab.local (port :{{ registry_port }} proxied via Nginx)"
