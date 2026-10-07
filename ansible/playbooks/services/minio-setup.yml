@@ -48,7 +48,8 @@
         env:
           MINIO_ROOT_USER: "{{ minio_root_user }}"
           MINIO_ROOT_PASSWORD: "{{ minio_root_password }}"
-          MINIO_BROWSER_REDIRECT_URL: "{{ minio_console_url }}"
+          MINIO_BROWSER_REDIRECT_URL: https://minio.tfdevs.com
+          MINIO_SERVER_URL: https://cdn.tfdevs.com
         volumes:
           - "{{ minio_data_dir }}:/data"
           - "{{ minio_config_dir }}:/root/.minio"
