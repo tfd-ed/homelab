@@ -310,8 +310,8 @@ ansible-playbook playbooks/services/monitoring-dashboards-setup.yml
 ansible-playbook playbooks/kubernetes/alloy-setup.yml
 ansible-playbook playbooks/networking/gateway-logging-setup.yml
 
-# Error tracking (Phase 2): GlitchTip in K3s, database on database-vm. Needs POSTGRES_PASSWORD,
-# GLITCHTIP_DB_PASSWORD and GLITCHTIP_SECRET_KEY. Runbook: docs/monitoring-phase2.md
+# Error tracking (Phase 2): GlitchTip in K3s, database on database-vm. Reads POSTGRES_PASSWORD,
+# GLITCHTIP_DB_PASSWORD and GLITCHTIP_SECRET_KEY from .env (see .env.example). Runbook: docs/monitoring-phase2.md
 ansible-playbook playbooks/services/glitchtip-setup.yml
 ```
 

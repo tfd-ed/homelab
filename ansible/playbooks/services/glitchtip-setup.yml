@@ -7,17 +7,16 @@
 # Play 2: GlitchTip in K3s (namespace glitchtip): one pod, web and worker in one process, no Valkey,
 #         source-map uploads on a small PVC, UI behind the shared ingress.
 #
-# Required env vars:
+# Variables, set in ansible/.env (see ansible/.env.example):
 #   POSTGRES_PASSWORD       existing postgres superuser password
-#   GLITCHTIP_DB_PASSWORD   password for the glitchtip postgres user
-#   GLITCHTIP_SECRET_KEY    random string, keep it stable (openssl rand -hex 32)
-# Optional env vars:
-#   GLITCHTIP_REGISTRATION  "True" (default, needed once to create the first account) or "False"
-#   GLITCHTIP_EMAIL_URL     smtp://user:pass@host:port; empty prints emails to the pod log
+#   GLITCHTIP_DB_PASSWORD   password for the glitchtip postgres user (12+ characters)
+#   GLITCHTIP_SECRET_KEY    random string, 32+ characters, keep it stable (openssl rand -hex 32)
+#   GLITCHTIP_REGISTRATION  optional: "True" (default, needed once to create the first account) or "False"
+#   GLITCHTIP_EMAIL_URL     optional: smtp://user:pass@host:port; empty prints emails to the pod log
 #
 # Usage:
-#   POSTGRES_PASSWORD=x GLITCHTIP_DB_PASSWORD=y GLITCHTIP_SECRET_KEY=z \
-#     ansible-playbook playbooks/services/glitchtip-setup.yml
+#   cd ansible && set -a && . ./.env && set +a
+#   ansible-playbook playbooks/services/glitchtip-setup.yml
 # Then follow docs/monitoring-phase2.md.
 # ============================================================
 

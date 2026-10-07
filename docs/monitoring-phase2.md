@@ -20,16 +20,16 @@ Admin (browser) --https://errors.tfdevs.com, Cloudflare Access SSO--> glitchtip 
 ## Apply it (order matters)
 
 1. **`tfdevs-infra`**, branch `feat/errors-phase2`: `terraform plan`, review, apply. Creates the DNS record, tunnel rule, NPM proxy host and Access application for `errors.tfdevs.com`, plus the narrow Access exception for source-map upload (see below).
-2. **This repo**:
+2. **This repo.** Add the GlitchTip variables to `ansible/.env` (copy them from `ansible/.env.example`: `GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_SECRET_KEY`, and `GLITCHTIP_REGISTRATION=True` for the first run; `POSTGRES_PASSWORD` is already there), then load it and run the play like the other playbooks:
 
    ```bash
    cd ansible
-   POSTGRES_PASSWORD=... GLITCHTIP_DB_PASSWORD=... GLITCHTIP_SECRET_KEY=$(openssl rand -hex 32) \
-     ansible-playbook playbooks/services/glitchtip-setup.yml
+   set -a && . ./.env && set +a
+   ansible-playbook playbooks/services/glitchtip-setup.yml
    ```
 
-   Keep `GLITCHTIP_SECRET_KEY` somewhere safe and use the same value every time you re-run: changing it logs everyone out and invalidates tokens. The play checks that the web app answers inside the cluster at the end. `GLITCHTIP_EMAIL_URL=smtp://user:pass@host:587` is optional; without it GlitchTip prints its emails (invitations, password resets) to the pod log (`kubectl -n glitchtip logs deploy/glitchtip`).
-3. **Create your account.** Registration is open on the first run. Open `https://errors.tfdevs.com`, register, then **close registration** by re-running the play with `GLITCHTIP_REGISTRATION=False` (same other variables). Invite the other admins from the UI afterwards.
+   Generate the key with `openssl rand -hex 32` and keep it: changing it logs everyone out and invalidates tokens. The play checks that the web app answers inside the cluster at the end. `GLITCHTIP_EMAIL_URL=smtp://user:pass@host:587` is optional; without it GlitchTip prints its emails (invitations, password resets) to the pod log (`kubectl -n glitchtip logs deploy/glitchtip`).
+3. **Create your account.** Registration is open on the first run. Open `https://errors.tfdevs.com`, register, then **close registration**: set `GLITCHTIP_REGISTRATION=False` in `ansible/.env`, load it again and re-run the play. Invite the other admins from the UI afterwards.
 4. **In GlitchTip**: create the organisation with the slug **`tfd`** (the CI workflows use it) and four projects, platform JavaScript for the web ones and Node for the API ones. Use these names, they become the slugs the CI uses: `tfd-web-prod`, `tfd-web-dev`, `tfd-api-prod`, `tfd-api-dev`. Each project's settings page shows its DSN.
 5. **Give the apps their DSN**, then deploy them (API first, as always):
 
