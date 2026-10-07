@@ -1,0 +1,65 @@
+---
+# Turn on ingress-nginx's Prometheus metrics (observability plan, Phase 3). Optional.
+#
+# The controller was deployed with --enable-metrics=false. This enables it, declares the metrics
+# port (10254) and annotates the pod so Alloy (alloy-setup.yml) scrapes it on its node. You then get
+# request rate, status codes and latency per ingress/host straight from the edge, including requests
+# that never reach an app pod.
+#
+# The controller runs as a single replica; the rollout starts the new pod before it stops the old
+# one, so traffic keeps flowing. Re-running is safe (nothing changes once enabled).
+#
+# Usage:  ansible-playbook playbooks/kubernetes/ingress-metrics-setup.yml
+- name: Enable ingress-nginx metrics
+  hosts: k8s-master
+  become: yes
+  gather_facts: no
+
+  vars:
+    kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+    deployment: ingress-nginx-controller
+    namespace: ingress-nginx
+
+  tasks:
+    - name: Read the controller arguments
+      shell: >-
+        kubectl -n {{ namespace }} get deployment {{ deployment }}
+        -o jsonpath='{.spec.template.spec.containers[0].args}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: ingress_args
+      changed_when: false
+
+    - name: Enable metrics and declare the port
+      shell: |
+        kubectl -n {{ namespace }} patch deployment {{ deployment }} --type=json -p '[
+          {"op":"replace","path":"/spec/template/spec/containers/0/args","value":{{ (ingress_args.stdout | from_json | map('replace', '--enable-metrics=false', '--enable-metrics=true') | list) | to_json }}},
+          {"op":"add","path":"/spec/template/spec/containers/0/ports/-","value":{"name":"metrics","containerPort":10254,"protocol":"TCP"}}
+        ]'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: "'--enable-metrics=false' in ingress_args.stdout"
+      register: ingress_patch
+
+    # A merge patch, so annotations that may already be there are kept.
+    - name: Annotate the pod so Alloy scrapes it
+      shell: >-
+        kubectl -n {{ namespace }} patch deployment {{ deployment }} --type=merge -p
+        '{"spec":{"template":{"metadata":{"annotations":{"prometheus.io/scrape":"true","prometheus.io/port":"10254","prometheus.io/path":"/metrics"}}}}}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: ingress_annotate
+      changed_when: "'patched' in ingress_annotate.stdout and 'no change' not in ingress_annotate.stdout"
+
+    - name: Wait for the rollout
+      shell: kubectl -n {{ namespace }} rollout status deployment/{{ deployment }} --timeout=180s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Summary
+      debug:
+        msg:
+          - "{{ 'ingress-nginx metrics enabled.' if (ingress_patch is changed) else 'ingress-nginx metrics were already enabled.' }}"
+          - "Alloy scrapes the controller pod on port 10254 once the pod carries the prometheus.io annotations (alloy-setup.yml must have run)."
+          - "Series: nginx_ingress_controller_requests (by host, status, ingress), nginx_ingress_controller_request_duration_seconds."

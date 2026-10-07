@@ -119,3 +119,92 @@ loki.write "loki" {
     url = sys.env("LOKI_URL")
   }
 }
+
+// ---- Metrics (observability plan, Phase 3) ---------------------------------------------------
+// Pods that carry the annotation prometheus.io/scrape: "true" (the API, bot, PDF renderer and SSR
+// pods, and the trace collector) are scraped on THIS node and written to Prometheus with
+// remote write. The metrics port is internal to the pod network and is not routed by any ingress.
+// Exemplars (the trace id of slow and failed requests) are kept, which is what links a latency
+// graph to a trace in Grafana.
+
+discovery.relabel "metrics" {
+  targets = discovery.kubernetes.pods.targets
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"]
+    regex         = "true"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_phase"]
+    regex         = "Pending|Succeeded|Failed"
+    action        = "drop"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_path"]
+    regex         = "(.+)"
+    target_label  = "__metrics_path__"
+  }
+
+  // address = pod IP + the annotated port
+  rule {
+    source_labels = ["__meta_kubernetes_pod_ip", "__meta_kubernetes_pod_annotation_prometheus_io_port"]
+    separator     = ":"
+    regex         = "(.+:\\d+)"
+    target_label  = "__address__"
+  }
+
+  // job = the app label (tfd-api, tfd-blog, tfd-bot, tfd-pdf, alloy-traces...), env = namespace.
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app"]
+    regex         = "(.+)"
+    target_label  = "job"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+    regex         = "(.+)"
+    target_label  = "job"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "env"
+  }
+
+  // The shared ingress serves both prod and dev: "edge", as in the logs.
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    regex         = "ingress-nginx"
+    replacement   = "edge"
+    target_label  = "env"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+}
+
+prometheus.scrape "apps" {
+  targets         = discovery.relabel.metrics.output
+  forward_to      = [prometheus.remote_write.prom.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  // OpenMetrics first: it is the only format that carries exemplars.
+  scrape_protocols = ["OpenMetricsText1.0.0", "PrometheusText0.0.4"]
+}
+
+prometheus.remote_write "prom" {
+  endpoint {
+    url            = sys.env("PROM_REMOTE_WRITE_URL")
+    send_exemplars = true
+  }
+}

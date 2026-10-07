@@ -1,0 +1,104 @@
+# Trace collector (observability plan, Phase 3): one Grafana Alloy that receives spans from the
+# apps, keeps every error and slow trace plus a sample of the rest, and forwards to Tempo.
+# Rendered and applied by playbooks/kubernetes/alloy-setup.yml. The pipeline lives in the
+# ConfigMap `alloy-traces-config`, created from services/files/monitoring/alloy/alloy-traces.alloy.
+#
+# ONE replica on purpose: tail sampling decides after a whole trace has arrived, which only works
+# if a single instance sees every span of a trace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alloy-traces
+  namespace: monitoring
+  labels:
+    app: alloy-traces
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: alloy-traces
+  template:
+    metadata:
+      labels:
+        app: alloy-traces
+      annotations:
+        # A changed pipeline changes this value, which rolls the pod.
+        checksum/config: "{{ traces_config_checksum }}"
+        # The node's Alloy scrapes this pod's own metrics (sampling decisions, dropped spans).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "12345"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: alloy
+          image: grafana/alloy:{{ alloy_version }}
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/tmp/alloy
+            - --disable-reporting
+          env:
+            - name: TEMPO_OTLP_ENDPOINT
+              value: "{{ tempo_otlp_endpoint }}"
+            # Soft ceiling below the container limit so the Go GC works harder instead of OOM.
+            - name: GOMEMLIMIT
+              value: "180MiB"
+          ports:
+            - name: otlp-http
+              containerPort: 4318
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: http
+              containerPort: 12345
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 12345
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-traces-config
+        - name: tmp
+          emptyDir: {}
+---
+# Where the apps send spans: http://alloy-traces.monitoring.svc.cluster.local:4318
+apiVersion: v1
+kind: Service
+metadata:
+  name: alloy-traces
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app: alloy-traces
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc

@@ -1,7 +1,11 @@
 ---
-# Deploy Grafana Alloy as a DaemonSet that ships pod logs to Loki (observability plan, Phase 1).
+# Grafana Alloy in the K3s cluster (observability plan, Phases 1 and 3):
+#   - a DaemonSet that ships pod logs to Loki and scrapes annotated app pods into Prometheus;
+#   - one trace collector (Deployment + Service `alloy-traces`) that applies tail sampling and
+#     forwards traces to Tempo.
 #
-# Prerequisite: Loki is running on the monitoring VM (playbooks/services/monitoring-setup.yml).
+# Prerequisite: Loki, Prometheus and Tempo are running on the monitoring VM
+# (playbooks/services/monitoring-setup.yml).
 # Usage:  ansible-playbook playbooks/kubernetes/alloy-setup.yml
 - name: Deploy Grafana Alloy log shipper on the K3s cluster
   hosts: k8s-master
@@ -12,6 +16,11 @@
     kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
     alloy_version: "v1.8.1"
     loki_push_url: "http://192.168.100.220:3100/loki/api/v1/push"
+    # Phase 3: metrics go to Prometheus (remote write receiver), traces to Tempo (OTLP gRPC).
+    prometheus_remote_write_url: "http://192.168.100.220:9090/api/v1/write"
+    tempo_otlp_endpoint: "192.168.100.220:4317"
+    traces_config_src: "{{ playbook_dir }}/../services/files/monitoring/alloy/alloy-traces.alloy"
+    traces_config_checksum: "{{ lookup('ansible.builtin.file', traces_config_src) | hash('sha1') }}"
     alloy_config_src: "{{ playbook_dir }}/../services/files/monitoring/alloy/alloy-k8s.alloy"
     config_checksum: "{{ lookup('ansible.builtin.file', alloy_config_src) | hash('sha1') }}"
 
@@ -31,6 +40,24 @@
       delay: 5
       until: loki_ready.status == 200
 
+    - name: Check that Prometheus accepts remote writes (monitoring-setup.yml enables it)
+      uri:
+        url: "{{ prometheus_remote_write_url | regex_replace('/api/v1/write$', '/-/ready') }}"
+        status_code: 200
+      retries: 3
+      delay: 5
+      register: prom_ready
+      until: prom_ready.status == 200
+
+    - name: Check that Tempo answers
+      uri:
+        url: "http://{{ tempo_otlp_endpoint | regex_replace(':4317$', '') }}:3200/ready"
+        status_code: 200
+      retries: 6
+      delay: 10
+      register: tempo_ready
+      until: tempo_ready.status == 200
+
     - name: Copy the Alloy pipeline
       copy:
         src: "{{ alloy_config_src }}"
@@ -41,6 +68,18 @@
       template:
         src: "{{ playbook_dir }}/manifests/alloy-daemonset.yaml.j2"
         dest: /tmp/alloy-daemonset.yaml
+        mode: "0644"
+
+    - name: Copy the trace collector pipeline
+      copy:
+        src: "{{ traces_config_src }}"
+        dest: /tmp/alloy-traces.alloy
+        mode: "0644"
+
+    - name: Render the trace collector manifest
+      template:
+        src: "{{ playbook_dir }}/manifests/alloy-traces.yaml.j2"
+        dest: /tmp/alloy-traces.yaml
         mode: "0644"
 
     - name: Ensure the monitoring namespace exists
@@ -59,6 +98,23 @@
       register: alloy_cm
       changed_when: "'configured' in alloy_cm.stdout or 'created' in alloy_cm.stdout"
 
+    - name: Create or update the alloy-traces-config ConfigMap
+      shell: >-
+        kubectl -n monitoring create configmap alloy-traces-config
+        --from-file=config.alloy=/tmp/alloy-traces.alloy
+        --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: traces_cm
+      changed_when: "'configured' in traces_cm.stdout or 'created' in traces_cm.stdout"
+
+    - name: Apply the trace collector
+      shell: kubectl apply -f /tmp/alloy-traces.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: traces_apply
+      changed_when: "'configured' in traces_apply.stdout or 'created' in traces_apply.stdout"
+
     - name: Apply the Alloy DaemonSet
       shell: kubectl apply -f /tmp/alloy-daemonset.yaml
       environment:
@@ -72,9 +128,17 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
       changed_when: false
 
+    - name: Wait for the trace collector
+      shell: kubectl -n monitoring rollout status deployment/alloy-traces --timeout=180s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
     - name: Summary
       debug:
         msg:
           - "Alloy runs on every worker and ships logs of the prod, dev, ingress-nginx and plausible namespaces to {{ loki_push_url }}."
           - "Its own metrics are on hostPort 12345 of each worker (scraped as job alloy-k8s)."
+          - "Pods annotated prometheus.io/scrape=true (api, bot, blog) are scraped on their node and written to {{ prometheus_remote_write_url }}."
+          - "Traces: apps send OTLP to http://alloy-traces.monitoring.svc.cluster.local:4318; errors, slow traces and 10 % of the rest go to Tempo at {{ tempo_otlp_endpoint }}."
           - "Remember: the ingress JSON log format only exists once k8s/ingress-configmap.yaml from tfd-api-next has been applied."
