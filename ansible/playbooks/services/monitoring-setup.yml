@@ -44,6 +44,9 @@
     telegram_thread_critical: "{{ lookup('ansible.builtin.env', 'TELEGRAM_THREAD_CRITICAL') | default('0', true) }}"
     telegram_thread_warning: "{{ lookup('ansible.builtin.env', 'TELEGRAM_THREAD_WARNING') | default('0', true) }}"
     heartbeat_url: "{{ lookup('ansible.builtin.env', 'HEARTBEAT_URL') }}"
+    # Origin of the site: alert messages get an "Open in control room" link to /admin/ops/alerts.
+    # Defaults to production; set CONTROL_ROOM_URL to use another origin.
+    control_room_url: "{{ lookup('ansible.builtin.env', 'CONTROL_ROOM_URL') | default('https://tfdevs.com', true) | regex_replace('/+$', '') }}"
 
     # ---- scrape and probe targets -------------------------------------------------------------
     k8s_node_targets:
@@ -206,6 +209,16 @@
       copy:
         src: "{{ playbook_dir }}/files/monitoring/alertmanager/telegram.tmpl"
         dest: "{{ monitoring_dir }}/alertmanager/templates/telegram.tmpl"
+        mode: "0644"
+
+    # The one site-specific value in the messages, written as its own template so telegram.tmpl can
+    # stay a verbatim copy (its {{ }} would clash with Jinja). Always defined, possibly empty.
+    - name: Install the control room link for alert messages
+      copy:
+        content: |
+          {% raw %}{{ define "tfd.controlroom.link" -}}{% endraw %}<a href="{{ control_room_url }}/admin/ops/alerts">Open in control room</a>{% raw %}{{- end }}{% endraw %}
+
+        dest: "{{ monitoring_dir }}/alertmanager/templates/links.tmpl"
         mode: "0644"
 
     # ---- Loki --------------------------------------------------------------------------------
@@ -437,8 +450,10 @@
                 - '--storage.path=/alertmanager'
                 - '--web.external-url=http://192.168.100.220:9093'
               ports:
-                # Loopback only: Grafana and Prometheus reach it over the compose network.
-                - "127.0.0.1:9093:9093"
+                # On the LAN, like Prometheus and Loki, so the API pods can list alerts and create
+                # silences for the control room (/admin/ops, Phase 4). Unauthenticated: it must stay
+                # off the tunnel and the gateway (see docs/monitoring-phase4.md).
+                - "9093:9093"
               volumes:
                 - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
                 - ./alertmanager/templates:/etc/alertmanager/templates:ro

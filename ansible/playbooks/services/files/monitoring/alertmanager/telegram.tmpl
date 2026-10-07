@@ -14,5 +14,5 @@ Runbook: <code>{{ .Annotations.runbook | html }}</code>{{ end }}
 
 {{ define "tfd.telegram.message" -}}
 {{ range .Alerts }}{{ template "tfd.telegram.alert" . }}
-{{ end }}
+{{ end }}{{ template "tfd.controlroom.link" }}
 {{- end }}
