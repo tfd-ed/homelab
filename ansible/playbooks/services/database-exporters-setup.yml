@@ -1,0 +1,124 @@
+---
+# ============================================================
+# MongoDB and Redis exporters on database-vm (observability plan, Phase 3)
+# ============================================================
+# Adds two containers next to the existing postgres-exporter, on the same Docker network:
+#   mongodb-exporter  :9216   (a read-only "exporter" user is created in MongoDB for it)
+#   redis-exporter    :9121
+# Prometheus scrapes them (monitoring-setup.yml) and the datastore alerts use their series.
+#
+# Variables, set in ansible/.env (see ansible/.env.example):
+#   MONGO_ROOT_PASSWORD      not needed here: the root password is read from the mongodb container itself
+#   MONGO_EXPORTER_PASSWORD  password for the new MongoDB "exporter" user (12+ characters, letters and digits)
+#   REDIS_PASSWORD           the existing Redis password
+#
+# Usage:
+#   cd ansible && set -a && . ./.env && set +a
+#   ansible-playbook playbooks/services/database-exporters-setup.yml
+# Then follow docs/monitoring-phase3.md.
+# ============================================================
+- name: Deploy the MongoDB and Redis exporters on database-vm
+  hosts: database
+  remote_user: ubuntu
+  become: yes
+
+  vars:
+    mongodb_exporter_version: "0.50.0"
+    redis_exporter_version: "v1.82.0"
+    mongo_exporter_password: "{{ lookup('ansible.builtin.env', 'MONGO_EXPORTER_PASSWORD') }}"
+    redis_password: "{{ lookup('ansible.builtin.env', 'REDIS_PASSWORD') }}"
+
+  tasks:
+    - name: Refuse to run without the required passwords
+      assert:
+        that:
+          - mongo_exporter_password | length >= 12
+          - mongo_exporter_password is match('^[A-Za-z0-9]+$')
+          - redis_password | length > 0
+        fail_msg: >-
+          Set MONGO_EXPORTER_PASSWORD (12+ characters, letters and digits only, it goes into a URL)
+          and REDIS_PASSWORD in the environment.
+
+    - name: Check that the MongoDB container is running
+      command: docker inspect -f "{{ '{{' }}.State.Running{{ '}}' }}" mongodb
+      register: mongo_running
+      changed_when: false
+      failed_when: mongo_running.rc != 0 or mongo_running.stdout | trim != "true"
+
+    # The root password is read from the container's own environment, and the new password goes in
+    # through stdin: neither appears in a process list.
+    - name: Create or update the read-only MongoDB user for the exporter
+      shell: >-
+        docker exec -i mongodb sh -c
+        'mongosh --quiet "mongodb://admin:$MONGO_INITDB_ROOT_PASSWORD@localhost:27017/admin"'
+      args:
+        stdin: |
+          const admin = db.getSiblingDB('admin');
+          const roles = [{ role: 'clusterMonitor', db: 'admin' }, { role: 'read', db: 'local' }];
+          if (admin.getUser('exporter')) {
+            admin.updateUser('exporter', { pwd: '{{ mongo_exporter_password }}', roles: roles });
+          } else {
+            admin.createUser({ user: 'exporter', pwd: '{{ mongo_exporter_password }}', roles: roles });
+          }
+          print('exporter user ok');
+      register: mongo_user
+      changed_when: false
+      failed_when: "'exporter user ok' not in mongo_user.stdout"
+      no_log: true
+
+    - name: Deploy the MongoDB exporter
+      community.docker.docker_container:
+        name: mongodb-exporter
+        image: "percona/mongodb_exporter:{{ mongodb_exporter_version }}"
+        state: started
+        restart: true
+        restart_policy: unless-stopped
+        ports:
+          - "9216:9216"
+        env:
+          MONGODB_URI: "mongodb://exporter:{{ mongo_exporter_password }}@mongodb:27017/admin?authSource=admin"
+        # A small set: server status (connections, memory, opcounters), replica set state, db sizes.
+        command:
+          - --collector.diagnosticdata
+          - --collector.replicasetstatus
+          - --collector.dbstats
+        networks:
+          - name: db_network
+      no_log: true
+
+    - name: Deploy the Redis exporter
+      community.docker.docker_container:
+        name: redis-exporter
+        image: "oliver006/redis_exporter:{{ redis_exporter_version }}"
+        state: started
+        restart: true
+        restart_policy: unless-stopped
+        ports:
+          - "9121:9121"
+        env:
+          REDIS_ADDR: "redis://redis:6379"
+          REDIS_PASSWORD: "{{ redis_password }}"
+        networks:
+          - name: db_network
+      no_log: true
+
+    - name: Wait for both exporters and check that they reach their database
+      uri:
+        url: "http://127.0.0.1:{{ item.port }}/metrics"
+        return_content: yes
+      register: exporter_metrics
+      until: exporter_metrics.status == 200 and (item.up in exporter_metrics.content)
+      retries: 12
+      delay: 5
+      loop:
+        - { port: 9216, up: "mongodb_up{cluster_role=\"mongod\"} 1" }
+        - { port: 9121, up: "redis_up 1" }
+      loop_control:
+        label: "port {{ item.port }}"
+
+    - name: Summary
+      debug:
+        msg:
+          - "mongodb-exporter: http://{{ ansible_host }}:9216/metrics (MongoDB user 'exporter', roles clusterMonitor + read on local)"
+          - "redis-exporter:   http://{{ ansible_host }}:9121/metrics"
+          - "Next: re-run playbooks/services/monitoring-setup.yml so Prometheus scrapes them (already in its config), then check /targets."
