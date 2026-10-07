@@ -21,7 +21,7 @@ Application services, databases, monitoring, and CI/CD pipeline setup.
 ---
 
 ### monitoring-setup.yml
-**Purpose:** Deploy Prometheus, Alertmanager (Telegram), blackbox-exporter, Grafana and Node Exporter  
+**Purpose:** Deploy Prometheus, Alertmanager (Telegram), blackbox-exporter, Loki, Grafana and Node Exporter  
 **Target:** monitoring (192.168.100.220)  
 **Usage:** `set -a && . ./.env && set +a && ansible-playbook playbooks/services/monitoring-setup.yml`
 
@@ -31,7 +31,8 @@ Application services, databases, monitoring, and CI/CD pipeline setup.
 - Prometheus v2.48.1 (port 9090) with alert rules (`files/monitoring/prometheus/alerts/`)
 - Alertmanager v0.28.1 (loopback 9093) routing to Telegram, Watchdog to an external heartbeat
 - blackbox-exporter v0.25.0 (loopback 9115): public HTTPS probes, VM SSH, database ports
-- Grafana 10.2.3 (port 3000), admin password from the environment
+- Loki 3.4 (LAN 3100): logs, 14-day retention (`level=error` 30 days)
+- Grafana 10.2.3 (port 3000), admin password from the environment, Loki datasource and the *TFD Requests* dashboard
 - Node Exporter (system metrics)
 - 30-day / 40 GB metrics retention
 - Validates configs (promtool, amtool) before restarting anything
@@ -40,7 +41,7 @@ Application services, databases, monitoring, and CI/CD pipeline setup.
 - Prometheus: http://192.168.100.220:9090
 - Grafana: http://192.168.100.220:3000 and https://grafana.tfdevs.com (Cloudflare Access)
 
-**Runbook, alert catalogue and verification:** `../../docs/monitoring-phase0.md`
+**Runbooks:** `../../docs/monitoring-phase0.md` (alerts), `../../docs/monitoring-phase1.md` (logs, request ids)
 
 **Helper script:** `../../run-monitoring-setup.sh`
 
