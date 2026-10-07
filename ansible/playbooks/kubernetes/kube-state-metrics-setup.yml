@@ -1,0 +1,58 @@
+---
+# Deploy kube-state-metrics so Prometheus can alert on crash loops, unready pods, replica
+# mismatches, OOM kills and NotReady nodes (observability plan, Phase 0).
+#
+# Usage:  ansible-playbook playbooks/kubernetes/kube-state-metrics-setup.yml
+# After:  re-run playbooks/services/monitoring-setup.yml if the target below changed.
+- name: Deploy kube-state-metrics on the K3s cluster
+  hosts: k8s-master
+  become: yes
+  gather_facts: no
+
+  vars:
+    kubeconfig_path: "/etc/rancher/k3s/k3s.yaml"
+    manifest_dest: /tmp/kube-state-metrics.yaml
+    node_port: 30686
+
+  tasks:
+    - name: Wait for K3s to be ready
+      wait_for:
+        path: "{{ kubeconfig_path }}"
+        state: present
+        timeout: 60
+
+    - name: Copy kube-state-metrics manifest
+      copy:
+        src: "{{ playbook_dir }}/manifests/kube-state-metrics.yaml"
+        dest: "{{ manifest_dest }}"
+        mode: "0644"
+
+    - name: Apply kube-state-metrics manifest
+      shell: kubectl apply -f {{ manifest_dest }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: ksm_apply
+      changed_when: "'configured' in ksm_apply.stdout or 'created' in ksm_apply.stdout"
+
+    - name: Wait for the rollout
+      shell: kubectl rollout status deployment/kube-state-metrics -n monitoring --timeout=180s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      changed_when: false
+
+    - name: Check that the NodePort serves metrics
+      uri:
+        url: "http://127.0.0.1:{{ node_port }}/metrics"
+        return_content: no
+        status_code: 200
+      register: ksm_metrics
+      retries: 6
+      delay: 5
+      until: ksm_metrics.status == 200
+
+    - name: Summary
+      debug:
+        msg:
+          - "kube-state-metrics is serving on NodePort {{ node_port }} of every node."
+          - "Prometheus scrapes it as job 'kube-state-metrics' (see monitoring-setup.yml)."
+          - "Keep this port on the LAN: do not add it to the tunnel or the gateway."
