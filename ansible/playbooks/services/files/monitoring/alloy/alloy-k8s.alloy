@@ -208,3 +208,56 @@ prometheus.remote_write "prom" {
     send_exemplars = true
   }
 }
+
+// ---- Container CPU (CFS throttling) -----------------------------------------------------------
+// The kubelet's cadvisor endpoint on THIS node: how often a container hit its CPU limit and was
+// paused for the rest of the 100 ms period. Without it a too-low limit is invisible, and shows up
+// only as mysterious latency (see tfd-blog-next/docs/API_LATENCY_INVESTIGATION_PLAN.md).
+// Only five series, only the prod and dev containers, and none of cadvisor's per-container-id
+// labels, so this adds a few hundred series to Prometheus, not thousands.
+
+prometheus.scrape "cadvisor" {
+  targets = [{
+    "__address__" = sys.env("NODE_IP") + ":10250",
+    "job"         = "cadvisor",
+    "node"        = sys.env("NODE_NAME"),
+  }]
+  forward_to        = [prometheus.relabel.cadvisor.receiver]
+  scheme            = "https"
+  metrics_path      = "/metrics/cadvisor"
+  bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  // The kubelet serves a certificate signed by the cluster's own CA, not by a public one.
+  tls_config {
+    insecure_skip_verify = true
+  }
+  scrape_interval = "30s"
+  scrape_timeout  = "20s"
+}
+
+prometheus.relabel "cadvisor" {
+  forward_to = [prometheus.remote_write.prom.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "container_cpu_cfs_periods_total|container_cpu_cfs_throttled_periods_total|container_cpu_cfs_throttled_seconds_total|container_cpu_usage_seconds_total|container_memory_working_set_bytes"
+    action        = "keep"
+  }
+
+  // The pod-level cgroup and the pause container have an empty container label.
+  rule {
+    source_labels = ["container"]
+    regex         = ".+"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["namespace"]
+    regex         = "prod|dev"
+    action        = "keep"
+  }
+
+  rule {
+    regex  = "id|image|name"
+    action = "labeldrop"
+  }
+}

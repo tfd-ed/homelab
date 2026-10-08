@@ -67,8 +67,93 @@ tests:
           - exp_labels: {severity: warning, job: tfd-api, env: prod}
             exp_annotations:
               summary: "API p95 latency is 2.425s"
-              description: "The API's 95th percentile response time has been above 1.5 s for 10 minutes. The slowest requests carry a trace link (exemplar) on the TFD Services latency panel."
+              description: "The API's 95th percentile response time (routes that exist; scanner hits on unknown URLs are left out) has been above 1.5 s for 10 minutes. The slowest requests carry a trace link (exemplar) on the TFD Services latency panel. If the container is also throttled (ContainerCpuThrottled, or the CPU throttling panel), raise its CPU limit first."
               runbook: "homelab-journey/docs/monitoring-phase3.md#apilatencyhigh"
+
+  - name: fast scanner hits on unknown URLs do not hide a slow API
+    interval: 1m
+    input_series:
+      # 900 scanner hits per minute, all answered instantly...
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", route="unmatched", le="0.005"}'
+        values: '0+900x30'
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", route="unmatched", le="+Inf"}'
+        values: '0+900x30'
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod", route="unmatched"}'
+        values: '0+900x30'
+      # ...next to 60 real requests per minute that all take 1-2.5 s
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", route="/x", le="1"}'
+        values: '0+0x30'
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", route="/x", le="2.5"}'
+        values: '0+60x30'
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", route="/x", le="+Inf"}'
+        values: '0+60x30'
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod", route="/x"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ApiLatencyHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, job: tfd-api, env: prod}
+            exp_annotations:
+              summary: "API p95 latency is 2.425s"
+              description: "The API's 95th percentile response time (routes that exist; scanner hits on unknown URLs are left out) has been above 1.5 s for 10 minutes. The slowest requests carry a trace link (exemplar) on the TFD Services latency panel. If the container is also throttled (ContainerCpuThrottled, or the CPU throttling panel), raise its CPU limit first."
+              runbook: "homelab-journey/docs/monitoring-phase3.md#apilatencyhigh"
+
+  - name: slow answers to unknown URLs alone do not page
+    interval: 1m
+    input_series:
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", route="unmatched", le="1"}'
+        values: '0+0x30'
+      - series: 'http_server_duration_seconds_bucket{job="tfd-api", env="prod", route="unmatched", le="+Inf"}'
+        values: '0+60x30'
+      - series: 'http_server_duration_seconds_count{job="tfd-api", env="prod", route="unmatched"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ApiLatencyHigh
+        exp_alerts: []
+
+  # ---- CPU throttling (cadvisor) -------------------------------------------------------------
+  - name: a container throttled in 10 percent of its periods (over all replicas) warns after 15 minutes
+    interval: 1m
+    input_series:
+      - series: 'container_cpu_cfs_periods_total{namespace="prod", container="tfd-api", pod="api-1"}'
+        values: '0+600x40'     # 10 periods/s
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="prod", container="tfd-api", pod="api-1"}'
+        values: '0+120x40'     # 20 % of them, so 10 % of the container's two replicas
+      # a second replica, healthy: the ratio is taken over the whole container (10 %)
+      - series: 'container_cpu_cfs_periods_total{namespace="prod", container="tfd-api", pod="api-2"}'
+        values: '0+600x40'
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="prod", container="tfd-api", pod="api-2"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ContainerCpuThrottled
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: ContainerCpuThrottled
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: prod, container: tfd-api}
+            exp_annotations:
+              summary: "tfd-api is CPU-throttled in 10% of its scheduling periods"
+              description: "The container keeps hitting its CPU limit (container tfd-api in prod). Node is single-threaded, so it is paused until the next 100 ms period each time: expect latency in round multiples of 100 ms. Raise the limit in k8s/prod/*.yaml (keep it at or above one core for Node services)."
+              runbook: "homelab-journey/docs/monitoring-phase3.md#containercputhrottled"
+
+  - name: a mostly healthy container and dev do not warn
+    interval: 1m
+    input_series:
+      - series: 'container_cpu_cfs_periods_total{namespace="prod", container="tfd-api", pod="api-1"}'
+        values: '0+600x40'
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="prod", container="tfd-api", pod="api-1"}'
+        values: '0+12x40'      # 2 %
+      - series: 'container_cpu_cfs_periods_total{namespace="dev", container="tfd-api", pod="dev-1"}'
+        values: '0+600x40'
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="dev", container="tfd-api", pod="dev-1"}'
+        values: '0+300x40'     # 50 %, but dev
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ContainerCpuThrottled
+        exp_alerts: []
 
   # ---- dependencies ------------------------------------------------------------------------
   - name: mongo unreachable from the API is critical

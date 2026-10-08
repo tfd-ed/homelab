@@ -30,7 +30,7 @@ groups:
 
       - alert: ApiLatencyHigh
         expr: |
-          histogram_quantile(0.95, sum by (le, job, env) (rate(http_server_duration_seconds_bucket{env="prod", job="tfd-api"}[10m]))) > 1.5
+          histogram_quantile(0.95, sum by (le, job, env) (rate(http_server_duration_seconds_bucket{env="prod", job="tfd-api", route!="unmatched"}[10m]))) > 1.5
           and
           sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-api"}[10m])) > 0.05
         for: 10m
@@ -38,12 +38,12 @@ groups:
           severity: warning
         annotations:
           summary: "API p95 latency is {{ $value | humanizeDuration }}"
-          description: "The API's 95th percentile response time has been above 1.5 s for 10 minutes. The slowest requests carry a trace link (exemplar) on the TFD Services latency panel."
+          description: "The API's 95th percentile response time (routes that exist; scanner hits on unknown URLs are left out) has been above 1.5 s for 10 minutes. The slowest requests carry a trace link (exemplar) on the TFD Services latency panel. If the container is also throttled (ContainerCpuThrottled, or the CPU throttling panel), raise its CPU limit first."
           runbook: "homelab-journey/docs/monitoring-phase3.md#apilatencyhigh"
 
       - alert: SsrLatencyHigh
         expr: |
-          histogram_quantile(0.95, sum by (le, job, env) (rate(http_server_duration_seconds_bucket{env="prod", job="tfd-blog"}[10m]))) > 2
+          histogram_quantile(0.95, sum by (le, job, env) (rate(http_server_duration_seconds_bucket{env="prod", job="tfd-blog", route!="unmatched"}[10m]))) > 2
           and
           sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-blog"}[10m])) > 0.05
         for: 10m
@@ -155,6 +155,25 @@ groups:
           summary: "{{ $labels.job }} pod {{ $labels.pod }} uses {{ $value | humanizePercentage }} of its memory limit"
           description: "The process is near its container memory limit and will be OOM-killed. Raise the limit in k8s/prod/*.yaml or find the leak."
           runbook: "homelab-journey/docs/monitoring-phase3.md#appmemorynearlimit"
+
+  - name: tfd-app-capacity
+    rules:
+      # A container that hits its CPU limit is paused until the next 100 ms period: every query and
+      # reply in flight waits together, which reads as latency in multiples of 100 ms while the
+      # databases are idle. Averages hide it (the API used 13 m of CPU on average with a 200m limit
+      # and still ran ~3 s p95). Needs the cadvisor scrape in the Alloy config.
+      - alert: ContainerCpuThrottled
+        expr: |
+          sum by (namespace, container) (rate(container_cpu_cfs_throttled_periods_total{namespace="prod"}[15m]))
+          / sum by (namespace, container) (rate(container_cpu_cfs_periods_total{namespace="prod"}[15m]))
+          > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.container }} is CPU-throttled in {{ $value | humanizePercentage }} of its scheduling periods"
+          description: "The container keeps hitting its CPU limit (container {{ $labels.container }} in {{ $labels.namespace }}). Node is single-threaded, so it is paused until the next 100 ms period each time: expect latency in round multiples of 100 ms. Raise the limit in k8s/{{ $labels.namespace }}/*.yaml (keep it at or above one core for Node services)."
+          runbook: "homelab-journey/docs/monitoring-phase3.md#containercputhrottled"
 
   - name: tfd-app-domain
     rules:

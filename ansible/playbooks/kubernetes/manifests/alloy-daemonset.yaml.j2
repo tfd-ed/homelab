@@ -17,6 +17,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  # The kubelet on the same node authorizes /metrics/cadvisor (container CPU throttling) with this.
+  - apiGroups: [""]
+    resources: ["nodes/metrics"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -68,6 +72,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            # The kubelet (cadvisor metrics) listens on the node's address, not the pod's.
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             - name: LOKI_URL
               value: "{{ loki_push_url }}"
             # Metrics (Phase 3): app metrics are written to Prometheus with remote write.

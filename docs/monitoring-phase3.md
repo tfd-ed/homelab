@@ -88,7 +88,14 @@ Run these from `ansible/` after `set -a && . ./.env && set +a`.
 More than 2 % of prod responses were 5xx for 5 minutes with real traffic (at least about 15 requests). Order of investigation: TFD Services (which route, since when), GlitchTip (the error and its stack), then the traces (Tempo, `status = error`) for the timing.
 
 ### ApiLatencyHigh
-p95 above 1.5 s for the API (2 s for SSR) for 10 minutes. The latency heatmap has exemplars: open a slow trace and read which span is long. A long `redis-EVAL` means Redis or the network to it; a long `find ...` means a slow MongoDB query.
+p95 above 1.5 s for the API (2 s for SSR) for 10 minutes. Calls to URLs that do not exist (`route="unmatched"`, mostly scanners, answered in milliseconds) are left out of the percentile, otherwise they flatter it. The latency heatmap has exemplars: open a slow trace and read which span is long. A long `redis-EVAL` means Redis or the network to it; a long `find ...` means a slow MongoDB query.
+
+**Before blaming the database, look at the CPU throttling panel** (TFD Services, Runtime). If the spans are long but the datastores answer quickly (TFD Datastores), and the durations come in round multiples of 100 ms, the container is being paused by its CPU limit: see the next section.
+
+### ContainerCpuThrottled
+A prod container was paused for hitting its CPU limit in more than 5 % of its scheduling periods, for 15 minutes. The kernel gives a container `limit x 100 ms` of CPU per 100 ms; once a burst uses it up, the whole container waits for the next period. Node is single-threaded, so every query and reply in flight stalls together and requests take 95, 200, 400... ms while MongoDB and Redis are idle. Average CPU hides it: in October 2026 the API used 13 m on average, with a 200m limit, and ran at a 3 s p95 (investigation: `tfd-blog-next/docs/API_LATENCY_INVESTIGATION_PLAN.md`).
+
+Check: `kubectl -n prod exec deploy/tfd-api-prod -- cat /sys/fs/cgroup/cpu.stat` (`nr_throttled` against `nr_periods`) or the "CPU throttling" panel. Fix: raise `resources.limits.cpu` in `tfd-api-next/k8s/prod/*.yaml` (keep it at or above one core for Node services; the request can stay low). The metrics come from the kubelet's cadvisor endpoint, scraped by the Alloy DaemonSet (`alloy-k8s.alloy`, "Container CPU"); only prod and dev containers and five series are kept. If the alert never evaluates, check that scrape (`up{job="cadvisor"}`).
 
 ### AppMetricsMissing
 No application series at all for 15 minutes (`AppMetricsEndpointDown` is one pod not answering). Check `kubectl -n monitoring logs ds/alloy` for remote write errors, that Prometheus runs with `--web.enable-remote-write-receiver` (`docker inspect prometheus`), and that the pods have the `prometheus.io/*` annotations and `METRICS_PORT`.

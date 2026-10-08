@@ -65,7 +65,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**Rate, errors, duration (RED) per service**, from the metrics each pod exposes. `tfd-api` is the API, `tfd-blog` the Nuxt server (SSR), `tfd-bot` the Telegram worker. Latency is by **route template**. On the heatmap, the pink dots are **exemplars**: slow or failed requests whose trace is one click away (needs the Tempo data source). The service map is drawn from the traces. Related: *TFD Requests* (logs of one request) and *TFD Datastores*."
+        "content": "**Rate, errors, duration (RED) per service**, from the metrics each pod exposes. `tfd-api` is the API, `tfd-blog` the Nuxt server (SSR), `tfd-bot` the Telegram worker. Latency is by **route template**. On the heatmap, the pink dots are **exemplars**: slow or failed requests whose trace is one click away (needs the Tempo data source). The service map is drawn from the traces. Related: *TFD Requests* (logs of one request) and *TFD Datastores*. Latency panels leave out `route=\"unmatched\"` (scanner hits on URLs that do not exist, answered in milliseconds), which would otherwise flatter the percentiles. The CPU throttling panels under *Runtime* are the first place to look when latency comes in round multiples of 100 ms."
       }
     },
     {
@@ -239,7 +239,7 @@
     {
       "id": 7,
       "type": "stat",
-      "title": "p95 latency, API",
+      "title": "p95 latency, API (known routes)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -253,7 +253,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-api\",env=~\"$env\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[5m])))",
           "instant": true
         }
       ],
@@ -296,7 +296,7 @@
     {
       "id": 8,
       "type": "stat",
-      "title": "p95 latency, SSR",
+      "title": "p95 latency, SSR (known routes)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -310,7 +310,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-blog\",env=~\"$env\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[5m])))",
           "instant": true
         }
       ],
@@ -614,7 +614,7 @@
     {
       "id": 16,
       "type": "timeseries",
-      "title": "p50 / p95 / p99, API",
+      "title": "p50 / p95 / p99, API (known routes)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -628,17 +628,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-api\",env=~\"$env\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-api\",env=~\"$env\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p95"
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-api\",env=~\"$env\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p99"
         }
       ],
@@ -668,7 +668,7 @@
     {
       "id": 17,
       "type": "timeseries",
-      "title": "p50 / p95 / p99, SSR",
+      "title": "p50 / p95 / p99, SSR (known routes)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -682,17 +682,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-blog\",env=~\"$env\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-blog\",env=~\"$env\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p95"
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-blog\",env=~\"$env\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p99"
         }
       ],
@@ -1144,13 +1144,108 @@
       }
     },
     {
+      "id": 35,
+      "type": "timeseries",
+      "title": "CPU throttling (share of periods paused)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 68,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, container) (rate(container_cpu_cfs_throttled_periods_total{namespace=~\"$env\",container=~\"tfd-api|tfd-bot|tfd-blog|tfd-pdf\"}[$__rate_interval])) / sum by (namespace, container) (rate(container_cpu_cfs_periods_total{namespace=~\"$env\",container=~\"tfd-api|tfd-bot|tfd-blog|tfd-pdf\"}[$__rate_interval]))",
+          "legendFormat": "{{namespace}} {{container}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "How often a container used up its CPU limit and was paused until the next 100 ms period. Above ~5 % under load means the limit is too low (alert ContainerCpuThrottled). Source: cadvisor via the Alloy DaemonSet."
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "CPU used vs limit (cores)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 68,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (namespace, container) (rate(container_cpu_usage_seconds_total{namespace=~\"$env\",container=~\"tfd-api|tfd-bot|tfd-blog|tfd-pdf\"}[$__rate_interval]))",
+          "legendFormat": "used {{namespace}} {{container}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (namespace, container) (kube_pod_container_resource_limits{resource=\"cpu\",namespace=~\"$env\",container=~\"tfd-api|tfd-bot|tfd-blog|tfd-pdf\"})",
+          "legendFormat": "limit {{namespace}} {{container}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "CPU actually used (summed over replicas) against the per-container limit. Averages look harmless: throttling happens in bursts inside a 100 ms period, so read this together with the panel on the left."
+    },
+    {
       "id": 28,
       "type": "row",
       "title": "Application",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 68,
+        "y": 76,
         "w": 24,
         "h": 1
       },
@@ -1166,7 +1261,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 69,
+        "y": 77,
         "w": 12,
         "h": 8
       },
@@ -1215,7 +1310,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 69,
+        "y": 77,
         "w": 12,
         "h": 8
       },
@@ -1269,7 +1364,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 77,
+        "y": 85,
         "w": 12,
         "h": 8
       },
@@ -1314,7 +1409,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 77,
+        "y": 85,
         "w": 12,
         "h": 8
       },
@@ -1356,7 +1451,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 85,
+        "y": 93,
         "w": 24,
         "h": 1
       },
@@ -1373,7 +1468,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 86,
+        "y": 94,
         "w": 24,
         "h": 10
       },
