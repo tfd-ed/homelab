@@ -68,7 +68,7 @@ Run these from `ansible/` after `set -a && . ./.env && set +a`.
 ## Done when
 
 - Prometheus `/targets`: `mongodb`, `redis`, `tempo` UP; `/graph` shows `up{job=~"tfd-api|tfd-blog|tfd-bot"}` with `env`, `pod` and `namespace` labels.
-- **TFD Services** shows requests/s and latency for the API and SSR. On the *latency distribution* heatmap, pink dots (exemplars) appear for slow or failed requests; clicking one opens the trace.
+- **TFD Services** shows requests/s and latency for the API and SSR. Every request panel filters `traffic!="probe"`, so our own Blackbox check (98 % of the SSR requests in a normal week) does not flatter the rate or the percentiles. The alert rules deliberately still count it: with real traffic this low, the probe is what keeps `SsrLatencyHigh` and `AppHighErrorRate` above their minimum-rate guard. On the *latency distribution* heatmap, pink dots (exemplars) appear for slow or failed requests; clicking one opens the trace.
 - A page view that calls the API produces **one trace across services**: Grafana, Explore, Tempo, search `service.name = tfd-blog`: the waterfall is `GET /verify/:code` (SSR), the call to the API, the API's handler, `redis-EVAL` (rate limiting) and `find certificates` (MongoDB, with the filter masked). The span `tfd.request_id` is the reference shown on the error page, so a trace can be searched by it (`{ span.tfd.request_id = "<id>" }`).
 - From that trace, *Logs for this span* shows the log lines carrying the same `traceId`. From a log line in *TFD Requests*, the `traceId` link opens the trace.
 - **The headline check**: pick a slow request on the heatmap, open its trace, find the slow span (a Redis or MongoDB call), and from the trace jump to its log lines.

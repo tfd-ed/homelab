@@ -116,6 +116,32 @@
         "hide": 0
       },
       {
+        "name": "hide",
+        "label": "hide probes",
+        "type": "custom",
+        "query": "Yes : probe,No : __none__",
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": true,
+          "text": "Yes",
+          "value": "probe"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "Yes",
+            "value": "probe"
+          },
+          {
+            "selected": false,
+            "text": "No",
+            "value": "__none__"
+          }
+        ],
+        "hide": 0
+      },
+      {
         "name": "id",
         "label": "id (request id or cf-ray)",
         "type": "textbox",
@@ -248,7 +274,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" [$__range]))",
+          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" [$__range]))",
           "refId": "A",
           "queryType": "instant",
           "editorMode": "code"
@@ -307,7 +333,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | status >= 400 | status < 500 [$__range]))",
+          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | status >= 400 | status < 500 [$__range]))",
           "refId": "A",
           "queryType": "instant",
           "editorMode": "code"
@@ -366,7 +392,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | status >= 500 [$__range]))",
+          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | status >= 500 [$__range]))",
           "refId": "A",
           "queryType": "instant",
           "editorMode": "code"
@@ -425,7 +451,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "quantile_over_time(0.95, {app=\"tfd-api\",env=~\"$env\"} | json | type=\"request\" | unwrap durationMs [$__range]) by ()",
+          "expr": "quantile_over_time(0.95, {app=\"tfd-api\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | unwrap durationMs [$__range]) by ()",
           "refId": "A",
           "queryType": "instant",
           "editorMode": "code"
@@ -484,7 +510,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | status < 400 [$__interval]))",
+          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | status < 400 [$__interval]))",
           "refId": "A",
           "queryType": "range",
           "editorMode": "code",
@@ -495,7 +521,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | status >= 400 | status < 500 [$__interval]))",
+          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | status >= 400 | status < 500 [$__interval]))",
           "refId": "B",
           "queryType": "range",
           "editorMode": "code",
@@ -506,7 +532,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | status >= 500 [$__interval]))",
+          "expr": "sum(count_over_time({app=~\"$app\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | status >= 500 [$__interval]))",
           "refId": "C",
           "queryType": "range",
           "editorMode": "code",
@@ -605,7 +631,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "quantile_over_time(0.95, {app=~\"tfd-api|tfd-blog\",env=~\"$env\"} | json | type=\"request\" | unwrap durationMs [$__interval]) by (app)",
+          "expr": "quantile_over_time(0.95, {app=~\"tfd-api|tfd-blog\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | unwrap durationMs [$__interval]) by (app)",
           "refId": "A",
           "queryType": "range",
           "editorMode": "code",
@@ -658,7 +684,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(10, sum by (route) (count_over_time({app=\"tfd-api\",env=~\"$env\"} | json | type=\"request\" [$__range])))",
+          "expr": "topk(10, sum by (route) (count_over_time({app=\"tfd-api\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" [$__range])))",
           "refId": "A",
           "queryType": "instant",
           "editorMode": "code",
@@ -709,7 +735,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(10, quantile_over_time(0.95, {app=\"tfd-api\",env=~\"$env\"} | json | type=\"request\" | unwrap durationMs [$__range]) by (route))",
+          "expr": "topk(10, quantile_over_time(0.95, {app=\"tfd-api\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | unwrap durationMs [$__range]) by (route))",
           "refId": "A",
           "queryType": "instant",
           "editorMode": "code",
@@ -760,7 +786,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(10, sum by (route) (count_over_time({app=\"tfd-api\",env=~\"$env\"} | json | type=\"request\" | status >= 500 [$__range])))",
+          "expr": "topk(10, sum by (route) (count_over_time({app=\"tfd-api\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | status >= 500 [$__range])))",
           "refId": "A",
           "queryType": "instant",
           "editorMode": "code",
@@ -811,7 +837,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "topk(10, sum by (country) (count_over_time({app=~\"tfd-api|tfd-blog\",env=~\"$env\"} | json | type=\"request\" | country != \"\" [$__range])))",
+          "expr": "topk(10, sum by (country) (count_over_time({app=~\"tfd-api|tfd-blog\",env=~\"$env\"} | json | type=\"request\" | device!~\"$hide\" | country != \"\" [$__range])))",
           "refId": "A",
           "queryType": "instant",
           "editorMode": "code",

@@ -60,6 +60,7 @@ Until 2b and 2c have run, `ScrapeTargetDown` fires for the `alloy-k8s` and `allo
 | **One id, every hop** | `curl -sI https://api.tfdevs.com/health` and note `X-Request-Id`; then Explore: `{env=~".+"} \|= "<that id>"` | Lines from `ingress-nginx` and `tfd-api` (and `tfd-blog` for a page request) |
 | **Browser path** | Open the site, copy a `cf-ray` from DevTools → Network → any API call; Explore `{env=~".+"} \|= "<cf-ray>"` | Lines from `npm`, `ingress-nginx` (and API if the request reached it) |
 | Dashboard | Grafana → TFD Requests | Request counts, latency, routes, countries populate; *id* box filters the log panel |
+| Probes hidden | TFD Requests, *hide probes* = Yes | Our own Blackbox and kubelet probes (`device=probe` in the logs) are left out of every count and percentile; the *By device* panel still shows them. Set it to *No* to see everything. Lines written before the 2026-10 release call the Blackbox probe `bot`. |
 | Error body id | `curl -s https://api.tfdevs.com/courses/not-an-id` | JSON body has `requestId` equal to the `X-Request-Id` header |
 | Alert path | Stop the Alloy DaemonSet (`kubectl -n monitoring delete ds alloy`) for 20 min | `LogShippingStalledK8s` warning in Telegram; re-run `alloy-setup.yml` to recover |
 
