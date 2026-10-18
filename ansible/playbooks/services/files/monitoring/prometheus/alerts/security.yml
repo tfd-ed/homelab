@@ -1,0 +1,36 @@
+# Account-creation alerts (incident 2026-10-16: an unused public POST /auth/register let anyone
+# create a password account, and nobody was told). Deployed verbatim (`copy`), like the other rule
+# files. Validate with:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 check rules /w/security.yml
+# and the unit tests in ../tests: promtool test rules tests/security.test.yml
+#
+# Source: `auth_user_created_total{method}` from tfd-api (tfd-api-next, UsersService.createUser).
+# method = google | github | facebook | telegram | admin (pre-provisioned by an admin) | password.
+# Series come from Alloy in K3s: job = tfd-api, env = prod | dev. Only prod pages.
+groups:
+  - name: tfd-security
+    rules:
+      # In prod no code path may create a password account (PASSWORD_AUTH_ENABLED is refused at boot
+      # and the service layer throws before this counter is touched). So a single sample means the
+      # gate was bypassed or removed. A counter is born at its first increment, so `increase()` would
+      # miss that first step; looking at the value itself holds the alert for an hour instead.
+      - alert: PasswordAccountCreatedInProd
+        expr: max_over_time(auth_user_created_total{env="prod", job="tfd-api", method="password"}[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "A password account was created in PRODUCTION"
+          description: "tfd-api counted a user created with a password in prod, which must never happen (SSO only). Find it: db.users.find({password: {$exists: true}}) on tfd-api-db-prod, and the request in /admin/ops/requests (POST /users, route /auth/*). Check PASSWORD_AUTH_ENABLED and APP_ENV on the prod deployment, then delete the account."
+          runbook: "tfd-blog-next/docs/SECURITY_INCIDENT_PASSWORD_REGISTRATION_2026-10-16.md"
+
+      # Normal sign-ups are a handful per day (24 in the 14 days before the incident). A burst means
+      # a bot is creating accounts through SSO, or an admin import went wrong.
+      - alert: AccountCreationSurge
+        expr: sum(increase(auth_user_created_total{env="prod", job="tfd-api"}[15m])) > 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanize }} accounts created in 15 minutes"
+          description: "More than 15 accounts were created in 15 minutes in prod, far above the usual few per day. Split by method in Explore (auth_user_created_total), then look at /admin/ops/requests for the callbacks (/auth/*/callback) and their IPs."
+          runbook: "tfd-blog-next/docs/SECURITY_INCIDENT_PASSWORD_REGISTRATION_2026-10-16.md"

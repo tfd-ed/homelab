@@ -1,0 +1,64 @@
+# promtool unit tests for alerts/security.yml. Run from the prometheus directory:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/security.test.yml
+rule_files:
+  - ../alerts/security.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: a password account in prod pages, even though the counter is born at 1
+    interval: 1m
+    input_series:
+      - series: 'auth_user_created_total{job="tfd-api", env="prod", method="password", pod="a"}'
+        values: '_ _ _ 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PasswordAccountCreatedInProd
+        exp_alerts:
+          - exp_labels: {severity: critical, job: tfd-api, env: prod, method: password, pod: a}
+            exp_annotations:
+              summary: "A password account was created in PRODUCTION"
+              description: "tfd-api counted a user created with a password in prod, which must never happen (SSO only). Find it: db.users.find({password: {$exists: true}}) on tfd-api-db-prod, and the request in /admin/ops/requests (POST /users, route /auth/*). Check PASSWORD_AUTH_ENABLED and APP_ENV on the prod deployment, then delete the account."
+              runbook: "tfd-blog-next/docs/SECURITY_INCIDENT_PASSWORD_REGISTRATION_2026-10-16.md"
+
+  - name: password accounts on dev never page
+    interval: 1m
+    input_series:
+      - series: 'auth_user_created_total{job="tfd-api", env="dev", method="password"}'
+        values: '1+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PasswordAccountCreatedInProd
+        exp_alerts: []
+
+  - name: normal SSO sign-ups do not page either alert
+    interval: 1m
+    input_series:
+      - series: 'auth_user_created_total{job="tfd-api", env="prod", method="google"}'
+        values: '5+0.5x30'   # one every two minutes: about 7 per 15 minutes, below the surge line
+      - series: 'auth_user_created_total{job="tfd-api", env="prod", method="admin"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: PasswordAccountCreatedInProd
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AccountCreationSurge
+        exp_alerts: []
+
+  - name: a burst of sign-ups across methods pages as a surge
+    interval: 1m
+    input_series:
+      - series: 'auth_user_created_total{job="tfd-api", env="prod", method="google"}'
+        values: '0+2x30'   # 2 per minute
+      - series: 'auth_user_created_total{job="tfd-api", env="prod", method="telegram"}'
+        values: '0+1x30'   # 1 per minute -> 45 per 15 minutes together
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AccountCreationSurge
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "45 accounts created in 15 minutes"
+              description: "More than 15 accounts were created in 15 minutes in prod, far above the usual few per day. Split by method in Explore (auth_user_created_total), then look at /admin/ops/requests for the callbacks (/auth/*/callback) and their IPs."
+              runbook: "tfd-blog-next/docs/SECURITY_INCIDENT_PASSWORD_REGISTRATION_2026-10-16.md"
