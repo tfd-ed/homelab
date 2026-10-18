@@ -1,0 +1,51 @@
+#!/bin/bash
+# Managed by Ansible (homelab-journey/ansible/playbooks/networking/database-firewall.yml)
+# Mode: {{ db_firewall_mode }}. Existing connections always pass.
+set -euo pipefail
+CHAIN={{ db_firewall_chain }}
+IFACE={{ fw_iface }}
+MODE={{ db_firewall_mode }}
+
+remove() {
+  while iptables -C DOCKER-USER -i "$IFACE" -j "$CHAIN" 2>/dev/null; do
+    iptables -D DOCKER-USER -i "$IFACE" -j "$CHAIN"
+  done
+  iptables -F "$CHAIN" 2>/dev/null || true
+  iptables -X "$CHAIN" 2>/dev/null || true
+}
+
+if [ "${1:-apply}" = "remove" ]; then remove; exit 0; fi
+
+iptables -N "$CHAIN" 2>/dev/null || iptables -F "$CHAIN"
+
+# A connection that already exists is never cut, whatever the mode.
+iptables -A "$CHAIN" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+
+# Match on the ORIGINAL destination port: by the time a packet reaches DOCKER-USER
+# Docker's NAT has already rewritten it to the container's port.
+allow() { # port source...
+  local port=$1; shift
+  for src in "$@"; do
+    iptables -A "$CHAIN" -p tcp -m conntrack --ctorigdstport "$port" -s "$src" -j RETURN
+  done
+}
+{% for port in db_firewall_data_ports %}
+allow {{ port }} {{ fw_data_sources | join(' ') }}
+{% endfor %}
+{% for port in db_firewall_exporter_ports %}
+allow {{ port }} {{ fw_exporter_sources | join(' ') }}
+{% endfor %}
+
+# Everything else aimed at a guarded port: log (rate limited), and drop when enforcing.
+{% for port in db_firewall_data_ports + db_firewall_exporter_ports %}
+iptables -A "$CHAIN" -p tcp -m conntrack --ctorigdstport {{ port }} -m limit --limit 20/min --limit-burst 40 \
+  -j LOG --log-prefix "DBFW would-block ($MODE) " --log-level 4
+if [ "$MODE" = "enforce" ]; then
+  iptables -A "$CHAIN" -p tcp -m conntrack --ctorigdstport {{ port }} -j DROP
+fi
+{% endfor %}
+iptables -A "$CHAIN" -j RETURN
+
+# Hook in once, first in DOCKER-USER, only for traffic arriving from the LAN.
+iptables -C DOCKER-USER -i "$IFACE" -j "$CHAIN" 2>/dev/null \
+  || iptables -I DOCKER-USER 1 -i "$IFACE" -j "$CHAIN"

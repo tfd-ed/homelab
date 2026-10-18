@@ -241,6 +241,10 @@
         job: "/opt/databases/backup.sh >> /var/log/db-backup.log 2>&1"
         state: present
 
+    # NOTE: the UFW rules below protect nothing. The databases run in Docker with published ports,
+    # which are NATed through FORWARD and never reach UFW's INPUT rules (and UFW is inactive on this
+    # VM, so they are skipped anyway). Who may reach the ports is enforced by
+    # playbooks/networking/database-firewall.yml (DOCKER-USER chain).
     - name: Configure UFW - Allow PostgreSQL
       ufw:
         rule: allow

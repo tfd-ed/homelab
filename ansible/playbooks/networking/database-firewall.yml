@@ -1,0 +1,168 @@
+---
+# Host firewall for the database VM's published ports (incident 2026-10-16 follow-up).
+#
+# Why not UFW: Mongo, Redis, Postgres and MySQL run in Docker with `ports: 27017:27017` and so on.
+# Docker publishes those through NAT, so the packets go through the FORWARD chain and never see
+# UFW's INPUT rules. The old `ufw allow` tasks in services/database-setup.yml therefore never
+# protected anything (and UFW is inactive on this VM). The supported hook is the DOCKER-USER chain,
+# which Docker evaluates first and never rewrites.
+#
+# What it installs on the database VM:
+#   - /usr/local/sbin/db-firewall.sh  builds a dedicated chain DB-FIREWALL and jumps to it from
+#     DOCKER-USER for traffic arriving on the LAN interface. Established connections always pass,
+#     so applying or flipping the mode never cuts a live connection.
+#   - db-firewall.service  re-applies it at boot and whenever Docker restarts.
+# Nothing else is touched: SSH, container-to-container traffic and other DOCKER-USER rules stay.
+#
+# Allowed sources:
+#   data ports  27017 6379 5432 3306 : K3s nodes, monitoring VM, n8n VM, + db_firewall_extra_sources
+#   exporters   9121 9187 9216       : monitoring VM only (Prometheus scrapes them)
+#
+# TWO STEPS, so a forgotten client can never cause an outage:
+#   1. db_firewall_mode=log (default)  traffic that WOULD be blocked is only logged:
+#        ssh database 'sudo journalctl -k --since "-7 days" | grep "DBFW would-block" | grep -oE "SRC=[0-9.]+ .*DPT=[0-9]+" | sort | uniq -c | sort -rn'
+#      Add every legitimate source to db_firewall_extra_sources, re-run, watch a few days.
+#   2. db_firewall_mode=enforce        the same rules, now dropping.
+#
+# Usage:
+#   ansible-playbook playbooks/networking/database-firewall.yml                          # log only
+#   ansible-playbook playbooks/networking/database-firewall.yml -e db_firewall_mode=enforce
+#   ansible-playbook playbooks/networking/database-firewall.yml -e db_firewall_state=absent   # roll back
+#   ansible-playbook playbooks/networking/database-firewall.yml -e '{"db_firewall_extra_sources":["192.168.100.77"]}'
+# Emergency rollback without Ansible, on the VM:
+#   sudo systemctl disable --now db-firewall   (its ExecStop removes the hook and the chain)
+- name: Restrict who can reach the database VM's published ports
+  hosts: database
+  become: yes
+  gather_facts: yes
+
+  vars:
+    db_firewall_state: present        # present | absent
+    db_firewall_mode: log             # log | enforce
+    db_firewall_iface: ""             # empty = the interface of the default route (eth0)
+    # Your workstation(s) and any other legitimate client, as IPs or CIDRs. Fill in what the log shows.
+    db_firewall_extra_sources: []
+    db_firewall_data_ports: [27017, 6379, 5432, 3306]
+    db_firewall_exporter_ports: [9121, 9187, 9216]
+    db_firewall_data_hosts: "{{ groups['k8s'] + ['monitoring', 'n8n'] }}"
+    db_firewall_exporter_hosts: ["monitoring"]
+    db_firewall_chain: DB-FIREWALL
+
+  pre_tasks:
+    - name: Check the inputs
+      assert:
+        that:
+          - db_firewall_state in ['present', 'absent']
+          - db_firewall_mode in ['log', 'enforce']
+          - db_firewall_data_hosts | length > 0
+        fail_msg: "db_firewall_state must be present|absent and db_firewall_mode log|enforce"
+
+    - name: Resolve the allowed addresses from the inventory
+      set_fact:
+        fw_iface: "{{ db_firewall_iface or ansible_default_ipv4.interface }}"
+        fw_data_sources: >-
+          {{ (db_firewall_data_hosts | map('extract', hostvars, 'ansible_host') | list
+              + db_firewall_extra_sources) | unique }}
+        fw_exporter_sources: >-
+          {{ (db_firewall_exporter_hosts | map('extract', hostvars, 'ansible_host') | list
+              + db_firewall_extra_sources) | unique }}
+
+    - name: Show what will be applied
+      debug:
+        msg:
+          - "state={{ db_firewall_state }} mode={{ db_firewall_mode }} interface={{ fw_iface }}"
+          - "data ports {{ db_firewall_data_ports }} <- {{ fw_data_sources }}"
+          - "exporter ports {{ db_firewall_exporter_ports }} <- {{ fw_exporter_sources }}"
+
+  tasks:
+    - name: Remove the firewall
+      when: db_firewall_state == 'absent'
+      block:
+        - name: Stop and disable the service (its ExecStop removes the hook and the chain)
+          systemd:
+            name: db-firewall
+            state: stopped
+            enabled: no
+          failed_when: false
+
+        - name: Remove the files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/systemd/system/db-firewall.service
+            - /usr/local/sbin/db-firewall.sh
+
+        - name: Reload systemd
+          systemd:
+            daemon_reload: yes
+
+    - name: Install the firewall
+      when: db_firewall_state == 'present'
+      block:
+        - name: Install iptables (already there on Ubuntu 24.04, nf_tables backend)
+          apt:
+            name: iptables
+            state: present
+
+        - name: Check that DOCKER-USER exists (Docker creates it; if not, Docker is not running)
+          command: iptables -S DOCKER-USER
+          changed_when: false
+
+        - name: Install the rules script
+          template:
+            src: "{{ playbook_dir }}/files/db-firewall.sh.j2"
+            dest: /usr/local/sbin/db-firewall.sh
+            owner: root
+            group: root
+            mode: "0750"
+          register: fw_script
+
+        - name: Install the systemd unit
+          copy:
+            src: "{{ playbook_dir }}/files/db-firewall.service"
+            dest: /etc/systemd/system/db-firewall.service
+            mode: "0644"
+          register: fw_unit
+
+        - name: Apply it
+          systemd:
+            name: db-firewall
+            state: "{{ 'restarted' if (fw_script.changed or fw_unit.changed) else 'started' }}"
+            enabled: yes
+            daemon_reload: yes
+
+        - name: Show the resulting chain
+          command: iptables -S {{ db_firewall_chain }}
+          register: fw_chain
+          changed_when: false
+
+        - name: Print it
+          debug:
+            var: fw_chain.stdout_lines
+
+  post_tasks:
+    # Prove the clients that must work still do, in both modes.
+    - name: Allowed clients can still reach the data ports
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ item.1 }}"
+        timeout: 8
+      delegate_to: "{{ item.0 }}"
+      loop: "{{ ['k8s-worker-1', 'k8s-worker-2', 'monitoring'] | product(db_firewall_data_ports) | list }}"
+      when: db_firewall_state == 'present'
+      loop_control:
+        label: "{{ item.0 }} -> {{ item.1 }}"
+
+    - name: In enforce mode a host that is NOT allowed is refused
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: 27017
+        timeout: 6
+      delegate_to: gateway-vm
+      register: fw_denied
+      failed_when: fw_denied is succeeded
+      when:
+        - db_firewall_state == 'present'
+        - db_firewall_mode == 'enforce'
+        - hostvars['gateway-vm'].ansible_host not in fw_data_sources

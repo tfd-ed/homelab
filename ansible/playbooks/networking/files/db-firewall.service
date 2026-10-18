@@ -1,0 +1,15 @@
+[Unit]
+Description=Restrict access to the database VM's Docker-published ports
+After=docker.service network-online.target
+Requires=docker.service
+# Restarting Docker restarts this too, so the hook is re-applied.
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/db-firewall.sh apply
+ExecStop=/usr/local/sbin/db-firewall.sh remove
+
+[Install]
+WantedBy=multi-user.target
