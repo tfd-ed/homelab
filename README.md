@@ -117,10 +117,15 @@ homelab-journey/
 │       │   ├── proxmox-node-server-setup.yml  # Temperature monitor API
 │       │   ├── qemu-agent-setup.yml
 │       │   ├── docker-setup.yml
+│       │   ├── storage-baseline.yml
 │       │   └── nginx-gateway-setup.yml
 │       ├── kubernetes/        # K8s cluster deployment
 │       │   ├── k3s-cluster-setup.yml
-│       │   └── k8s-dashboard-setup.yml
+│       │   ├── k8s-dashboard-setup.yml
+│       │   ├── alloy-setup.yml               # log shipping (Phase 1)
+│       │   ├── ingress-metrics-setup.yml
+│       │   ├── kube-state-metrics-setup.yml
+│       │   └── manifests/
 │       ├── services/          # Application services
 │       │   ├── database-setup.yml
 │       │   ├── monitoring-setup.yml
@@ -135,10 +140,14 @@ homelab-journey/
 │       │   └── minio-*.yml    # MinIO setup / migrate / cleanup
 │       └── networking/        # Network & remote access
 │           ├── cloudflare-tunnel-setup.yml
-│           └── github-runner-setup.yml
+│           ├── github-runner-setup.yml
+│           ├── gateway-logging-setup.yml      # JSON access log on the gateway (Phase 1)
+│           ├── database-firewall.yml          # who may reach the database VM's ports
+│           ├── k3s-nodeport-firewall.yml      # who may reach the ingress NodePorts
+│           └── files/                         # scripts/units the firewall playbooks install
 ├── script/             # Helper scripts (run-*-setup.sh wrappers, SSH key generation,
 │                       #   k8s/Cloudflare setup, MinIO migration, known_hosts cleanup)
-├── docs/               # n8n workflows/agents, MinIO guides, bootcamp registration docs
+├── docs/               # monitoring runbooks (monitoring-phase0..4.md), n8n workflows/agents, MinIO guides, bootcamp registration docs
 ├── diagram/            # Infrastructure diagrams
 ```
 
@@ -263,7 +272,7 @@ This will install Nginx Proxy Manager on the gateway VM and configure it as a re
 ```bash
 # Run interactive setup script
 cd ansible
-ansible-playbook playbooks/networking/nginx-gateway-setup.yml
+ansible-playbook playbooks/infrastructure/nginx-gateway-setup.yml
 ```
 
 The script will:
@@ -281,6 +290,8 @@ chmod ./script/run-database-setup.sh
 ```
 
 Note that this will load passwords from the `.env` file. If you run ansible playbook directly, make sure to set the environment variables or edit the playbook to include the passwords.
+
+The databases run in Docker, which publishes their ports through NAT and bypasses UFW, so UFW does not protect them. Restrict who can reach them with the host firewall in [9. Restrict network access](#9-restrict-network-access).
 
 ### 6. Setup n8n Workflow Automation
 This will install n8n on the n8n VM and configure it to use the PostgreSQL database on the database server VM.
@@ -370,6 +381,33 @@ curl http://192.168.100.250:11434/api/generate \
 curl http://192.168.100.250:11434/api/tags
 ```
 
+## 9. Restrict network access
+
+Two host firewalls close paths that the normal setup leaves open to the whole LAN. Both work in two steps so a forgotten client can never cause an outage: **log** first (default, nothing is dropped), then **enforce** after a few days of clean logs. Both refuse to apply without the required hosts allowed, and both can be rolled back with `-e <prefix>_state=absent`.
+
+| Playbook | Runs on | Guards | Allowed sources |
+|---|---|---|---|
+| `database-firewall.yml` (`db_firewall_*`) | database VM | Mongo 27017, Redis 6379, Postgres 5432, MySQL 3306; exporters 9121/9187/9216 | K3s nodes, monitoring VM, n8n VM (+ extras); exporters: monitoring VM only |
+| `k3s-nodeport-firewall.yml` (`np_firewall_*`) | every K3s node | ingress NodePorts 30389 (http), 31943 (https) | gateway VM, K3s nodes, monitoring VM (+ extras) |
+
+```bash
+cd ansible
+ansible-playbook playbooks/networking/database-firewall.yml              # log only
+ansible-playbook playbooks/networking/k3s-nodeport-firewall.yml          # log only; roll out one node first: --limit k8s-worker-1
+
+# Read what would be blocked (run on the target; add legitimate sources to *_extra_sources and re-run):
+sudo journalctl -k --since "-7 days" | grep "DBFW would-block"      # database VM
+sudo journalctl -k --since "-7 days" | grep "K3SNP would-block"     # K3s node
+
+# After a few quiet days:
+ansible-playbook playbooks/networking/database-firewall.yml -e db_firewall_mode=enforce
+ansible-playbook playbooks/networking/k3s-nodeport-firewall.yml -e np_firewall_mode=enforce
+```
+
+Why the NodePort one matters: the public path is Cloudflare, tunnel, gateway VM (Nginx Proxy Manager), a K3s NodePort, the ingress, then the app. The apps trust the client IP forwarded along that path. kube-proxy rewrites the source of NodePort packets, so without the firewall any LAN host could call the NodePort directly and choose its own client IP (and so its own rate-limit bucket). Details: `tfd-blog-next/docs/RATE_LIMIT_PROXY_INVESTIGATION_2026-10-17.md`. The API's own pod-level restriction is a Kubernetes NetworkPolicy in `tfd-api-next/k8s/*/network-policy.yaml`, applied by its deploy workflows.
+
+Roll-out notes: the NPM proxy hosts target worker-1, which receives all public traffic, so start there. The monitoring VM's `ingress-nodeport` probe opens `:30389` on worker-1 every 15 s and is allowed by default. Your own workstation is blocked from the NodePort once enforcing; add it to `np_firewall_extra_sources` if you want direct access.
+
 ## Operations & Quick Reference
 
 ### Daily Operations
@@ -449,9 +487,12 @@ sudo systemctl status postgresql
 sudo systemctl status mysql
 sudo systemctl status mongod
 
-# Check firewall rules
-sudo ufw status
-# Should show ports 5432, 3306, 27017 allowed
+# Check firewall rules. UFW does not apply to Docker-published ports; use the DB-FIREWALL chain
+sudo iptables -S DB-FIREWALL
+# In log mode nothing is dropped; check what it would block:
+sudo journalctl -k --since "-1 day" | grep "DBFW would-block"
+# A client that is blocked in enforce mode: add its IP to db_firewall_extra_sources and re-run
+# playbooks/networking/database-firewall.yml (or roll back: -e db_firewall_state=absent)
 
 # Verify databases are listening on all interfaces
 sudo netstat -tlnp | grep -E '5432|3306|27017'
@@ -584,6 +625,23 @@ sudo iptables -L -n -v
 - Check K3s service on nodes: `sudo systemctl status k3s` or `sudo systemctl status k3s-agent`
 - Verify routing: `ip route show`
 
+### Public Site Down After Enforcing the NodePort Firewall
+
+**Issue:** Sites return 502/timeouts, or the `ingress-nodeport` probe fails, right after `np_firewall_mode=enforce`.
+
+```bash
+# On worker-1: is the gateway (192.168.100.210) matching the allow rule, and what is being dropped?
+sudo iptables -t raw -L K3S-NODEPORT-FW -v -n
+sudo journalctl -k --since "-10min" | grep "K3SNP would-block" | grep -oE "SRC=[0-9.]+ .*DPT=[0-9]+" | sort | uniq -c
+```
+
+**Fix:** roll back at once, then add the missing source and re-enforce.
+
+```bash
+ansible-playbook playbooks/networking/k3s-nodeport-firewall.yml -e np_firewall_state=absent
+# or, on a node:  sudo systemctl disable --now k3s-nodeport-firewall
+```
+
 ### General Debugging Tips
 
 1. **Always check events first:**
@@ -621,10 +679,10 @@ sudo iptables -L -n -v
 ### Ansible Playbook Categories
 
 All playbooks are organized in `ansible/playbooks/` by functional category:
-- 🏗️ **[Infrastructure](ansible/playbooks/infrastructure/)** - Proxmox, Docker, Nginx, QEMU agent (5 playbooks)
-- ☸️ **[Kubernetes](ansible/playbooks/kubernetes/)** - K3s cluster deployment (2 playbooks)
-- 🚀 **[Services](ansible/playbooks/services/)** - Databases, monitoring, node-exporter, n8n, CI/CD, AI VM, Plausible, MinIO (11 playbooks)
-- 🌐 **[Networking](ansible/playbooks/networking/)** - Cloudflare tunnel, GitHub runner (2 playbooks)
+- 🏗️ **[Infrastructure](ansible/playbooks/infrastructure/)** - Proxmox, Docker, Nginx gateway, QEMU agent, storage baseline (6 playbooks)
+- ☸️ **[Kubernetes](ansible/playbooks/kubernetes/)** - K3s cluster, dashboard, log shipping and metrics (5 playbooks)
+- 🚀 **[Services](ansible/playbooks/services/)** - Databases, monitoring, error tracking, node-exporter, n8n, CI/CD, AI VM, Plausible, MinIO (13 playbooks)
+- 🌐 **[Networking](ansible/playbooks/networking/)** - Cloudflare tunnel, GitHub runner, gateway logging, database and NodePort firewalls (5 playbooks)
 
 
 ## 📝 Notes
