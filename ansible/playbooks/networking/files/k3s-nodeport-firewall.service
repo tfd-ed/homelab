@@ -1,0 +1,13 @@
+[Unit]
+Description=Restrict who can reach the K3s ingress NodePorts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/k3s-nodeport-firewall.sh apply
+ExecStop=/usr/local/sbin/k3s-nodeport-firewall.sh remove
+
+[Install]
+WantedBy=multi-user.target

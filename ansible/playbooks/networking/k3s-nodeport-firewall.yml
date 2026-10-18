@@ -1,0 +1,185 @@
+---
+# Only the gateway VM may open connections to the K3s ingress NodePorts (30389 http, 31943 https).
+#
+# Why: the public path is Cloudflare -> tunnel -> gateway VM (NPM) -> NodePort on a K3s node ->
+# ingress-nginx -> pod. The apps believe CF-Connecting-IP / X-Forwarded-For because that path is
+# the only way in. But the NodePort listens on the whole LAN, and kube-proxy rewrites the source
+# of every NodePort packet (externalTrafficPolicy: Cluster), so the ingress cannot tell a LAN host
+# from the gateway: any LAN host could call the NodePort directly and choose its own client IP,
+# and with it its own rate-limit bucket (tfd-blog-next docs/RATE_LIMIT_PROXY_INVESTIGATION_2026-10-17.md).
+# Filtering by source before kube-proxy sees the packet closes that without touching Services,
+# NPM or the ingress, and needs no `externalTrafficPolicy: Local` (NPM targets worker-1 while the
+# single ingress pod runs on worker-2, so Local would break traffic).
+#
+# What it installs on every K3s node (hosts: k8s):
+#   - /usr/local/sbin/k3s-nodeport-firewall.sh  builds a chain K3S-NODEPORT-FW in the raw table and
+#     jumps to it first in raw/PREROUTING for TCP to the guarded ports arriving on the LAN
+#     interface. raw runs before conntrack and NAT, so it sees the real source. Pod traffic comes
+#     in on the CNI interface and is never touched; nothing else on the node changes.
+#   - k3s-nodeport-firewall.service  re-applies it at boot.
+#
+# Allowed sources: the gateway VM, the K3s nodes, the monitoring VM (Prometheus' `ingress-nodeport`
+# probe opens :30389 on worker-1 every 15 s, see docs/monitoring-phase0.md; found in the log-mode
+# data on 2026-10-18), + np_firewall_extra_sources.
+# The play refuses to run if the gateway VM is not among the allowed sources.
+#
+# TWO STEPS, so a forgotten client can never cause an outage:
+#   1. np_firewall_mode=log (default)  traffic that WOULD be blocked is only logged. On a node:
+#        sudo journalctl -k --since "-7 days" | grep "K3SNP would-block" | grep -oE "SRC=[0-9.]+ .*DPT=[0-9]+" | sort | uniq -c | sort -rn
+#      Anything listed that must keep working (a workstation, a monitoring probe, the CI VM) goes in
+#      np_firewall_extra_sources; re-run; watch a few days. Expect your workstation to show up.
+#   2. np_firewall_mode=enforce        the same rules, now dropping. Existing connections from a
+#      source that is not allowed are cut at that moment, so only flip after step 1 is quiet.
+#
+# Usage (from ansible/):
+#   ansible-playbook playbooks/networking/k3s-nodeport-firewall.yml                          # log only
+#   ansible-playbook playbooks/networking/k3s-nodeport-firewall.yml -e np_firewall_mode=enforce
+#   ansible-playbook playbooks/networking/k3s-nodeport-firewall.yml -e np_firewall_state=absent   # roll back
+#   ansible-playbook playbooks/networking/k3s-nodeport-firewall.yml -e '{"np_firewall_extra_sources":["192.168.100.77"]}'
+# Roll out one node first:  --limit k8s-worker-2   (the ingress pod's node), then the rest.
+# Emergency rollback without Ansible, on a node:
+#   sudo systemctl disable --now k3s-nodeport-firewall   (its ExecStop removes the hook and the chain)
+- name: Restrict who can reach the K3s ingress NodePorts
+  hosts: k8s
+  become: yes
+  gather_facts: yes
+
+  vars:
+    np_firewall_state: present        # present | absent
+    np_firewall_mode: log             # log | enforce
+    np_firewall_iface: ""             # empty = the interface of the default route
+    np_firewall_ports: [30389, 31943] # ingress-nginx-controller NodePorts (http, https)
+    # Your workstation(s) and any other legitimate client, as IPs or CIDRs. Fill in what the log shows.
+    np_firewall_extra_sources: []
+    np_firewall_allowed_hosts: "{{ ['gateway-vm', 'monitoring'] + groups['k8s'] }}"
+    np_firewall_chain: K3S-NODEPORT-FW
+
+  pre_tasks:
+    - name: Check the inputs
+      assert:
+        that:
+          - np_firewall_state in ['present', 'absent']
+          - np_firewall_mode in ['log', 'enforce']
+          - np_firewall_ports | length > 0
+        fail_msg: "np_firewall_state must be present|absent and np_firewall_mode log|enforce"
+
+    - name: Resolve the allowed addresses from the inventory
+      set_fact:
+        fw_iface: "{{ np_firewall_iface or ansible_default_ipv4.interface }}"
+        fw_sources: >-
+          {{ (np_firewall_allowed_hosts | map('extract', hostvars, 'ansible_host') | list
+              + np_firewall_extra_sources) | unique }}
+
+    - name: Never lock out the gateway VM
+      assert:
+        that:
+          - hostvars['gateway-vm'].ansible_host in fw_sources
+        fail_msg: "The gateway VM must be an allowed source: it is the only way public traffic reaches the cluster"
+
+    - name: Show what will be applied
+      debug:
+        msg:
+          - "state={{ np_firewall_state }} mode={{ np_firewall_mode }} interface={{ fw_iface }}"
+          - "ports {{ np_firewall_ports }} <- {{ fw_sources }}"
+
+  tasks:
+    - name: Remove the firewall
+      when: np_firewall_state == 'absent'
+      block:
+        - name: Stop and disable the service (its ExecStop removes the hook and the chain)
+          systemd:
+            name: k3s-nodeport-firewall
+            state: stopped
+            enabled: no
+          failed_when: false
+
+        - name: Remove the files
+          file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/systemd/system/k3s-nodeport-firewall.service
+            - /usr/local/sbin/k3s-nodeport-firewall.sh
+
+        - name: Reload systemd
+          systemd:
+            daemon_reload: yes
+
+    - name: Install the firewall
+      when: np_firewall_state == 'present'
+      block:
+        - name: Install iptables (already there on Ubuntu 24.04, nf_tables backend)
+          apt:
+            name: iptables
+            state: present
+
+        - name: Install the rules script
+          template:
+            src: "{{ playbook_dir }}/files/k3s-nodeport-firewall.sh.j2"
+            dest: /usr/local/sbin/k3s-nodeport-firewall.sh
+            owner: root
+            group: root
+            mode: "0750"
+          register: fw_script
+
+        - name: Install the systemd unit
+          copy:
+            src: "{{ playbook_dir }}/files/k3s-nodeport-firewall.service"
+            dest: /etc/systemd/system/k3s-nodeport-firewall.service
+            mode: "0644"
+          register: fw_unit
+
+        - name: Apply it
+          systemd:
+            name: k3s-nodeport-firewall
+            state: "{{ 'restarted' if (fw_script.changed or fw_unit.changed) else 'started' }}"
+            enabled: yes
+            daemon_reload: yes
+
+        - name: Show the resulting chain
+          command: iptables -t raw -S {{ np_firewall_chain }}
+          register: fw_chain
+          changed_when: false
+
+        - name: Print it
+          debug:
+            var: fw_chain.stdout_lines
+
+  post_tasks:
+    # Prove the path that carries all public traffic still works, in both modes. If this fails the
+    # play stops with the rollback command in the header; run it before anything else.
+    - name: The gateway VM can still reach the ingress NodePorts
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ item }}"
+        timeout: 8
+      delegate_to: gateway-vm
+      loop: "{{ np_firewall_ports }}"
+      when: np_firewall_state == 'present'
+
+    # The ingress answers on every node only if a pod runs there or kube-proxy forwards: check the
+    # real thing, an HTTP request through the node the gateway actually uses.
+    - name: The ingress still routes a request from the gateway
+      uri:
+        url: "http://{{ ansible_host }}:{{ np_firewall_ports[0] }}/health"
+        headers:
+          Host: api.tfdevs.com
+        status_code: [200, 301, 302, 404]
+        timeout: 8
+      delegate_to: gateway-vm
+      when:
+        - np_firewall_state == 'present'
+        - inventory_hostname == 'k8s-worker-1'
+
+    - name: In enforce mode a LAN host that is NOT allowed is refused
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ np_firewall_ports[0] }}"
+        timeout: 6
+      delegate_to: n8n
+      register: fw_denied
+      failed_when: fw_denied is succeeded
+      when:
+        - np_firewall_state == 'present'
+        - np_firewall_mode == 'enforce'
+        - hostvars['n8n'].ansible_host not in fw_sources

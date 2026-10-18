@@ -51,6 +51,15 @@ ansible-playbook playbooks/networking/database-firewall.yml                  # l
 ansible-playbook playbooks/networking/database-firewall.yml -e db_firewall_mode=enforce
 ```
 
+### k3s-nodeport-firewall.yml
+
+Only the gateway VM (and a few listed hosts) may open connections to the K3s ingress NodePorts (30389 http, 31943 https). Without it any LAN host can call the NodePort directly and choose its own `CF-Connecting-IP`, and with it its own rate-limit bucket: kube-proxy rewrites the source of NodePort packets, so the ingress cannot tell it from the gateway. Filtering in the `raw` table (before conntrack and NAT) sees the real source. Pod traffic and everything else on the node are untouched.
+
+- Runs on every K3s node (`hosts: k8s`). Allowed: gateway VM, K3s nodes, monitoring VM (Prometheus `ingress-nodeport` probe on worker-1:30389), plus `np_firewall_extra_sources`. It refuses to run if the gateway is not allowed.
+- Two steps. `np_firewall_mode=log` (default) only logs (`journalctl -k | grep "K3SNP would-block"`); add every legitimate client, watch several days, then `-e np_firewall_mode=enforce`. Roll out one node first (`--limit k8s-worker-1` receives the public traffic).
+- Roll back with `-e np_firewall_state=absent`, or on a node `systemctl disable --now k3s-nodeport-firewall`.
+- Background: `tfd-blog-next/docs/RATE_LIMIT_PROXY_INVESTIGATION_2026-10-17.md`.
+
 ### github-runner-setup.yml
 **Purpose:** Setup GitHub Actions self-hosted runner (legacy/standalone)  
 **Target:** Typically ci-cd VM  

@@ -1,0 +1,47 @@
+#!/bin/bash
+# Managed by Ansible (homelab-journey/ansible/playbooks/networking/k3s-nodeport-firewall.yml)
+# Mode: {{ np_firewall_mode }}.
+#
+# Guards the ingress controller's NodePorts on this K3s node. Only the gateway VM (Nginx Proxy
+# Manager, behind the Cloudflare tunnel) and the listed sources may open connections to them.
+#
+# Why the raw table: kube-proxy rewrites the source (SNAT) once a NodePort packet is accepted, so
+# after that point the ingress cannot tell a LAN host from the gateway. raw/PREROUTING runs before
+# conntrack and before any NAT, so it sees the true source and the original destination port.
+# K3s (kube-proxy, flannel, the network-policy controller) does not manage this table.
+set -euo pipefail
+CHAIN={{ np_firewall_chain }}
+IFACE={{ fw_iface }}
+MODE={{ np_firewall_mode }}
+PORTS={{ np_firewall_ports | join(',') }}
+
+remove() {
+  while iptables -t raw -C PREROUTING -i "$IFACE" -p tcp -m multiport --dports "$PORTS" -j "$CHAIN" 2>/dev/null; do
+    iptables -t raw -D PREROUTING -i "$IFACE" -p tcp -m multiport --dports "$PORTS" -j "$CHAIN"
+  done
+  iptables -t raw -F "$CHAIN" 2>/dev/null || true
+  iptables -t raw -X "$CHAIN" 2>/dev/null || true
+}
+
+if [ "${1:-apply}" = "remove" ]; then remove; exit 0; fi
+
+iptables -t raw -N "$CHAIN" 2>/dev/null || iptables -t raw -F "$CHAIN"
+
+# Allowed sources: the gateway VM, the K3s nodes themselves, and anything added in
+# np_firewall_extra_sources (a workstation, a monitoring probe).
+{% for src in fw_sources %}
+iptables -t raw -A "$CHAIN" -s {{ src }} -j RETURN
+{% endfor %}
+
+# Everything else aimed at a guarded port: log (rate limited), and drop when enforcing.
+iptables -t raw -A "$CHAIN" -m limit --limit 20/min --limit-burst 40 \
+  -j LOG --log-prefix "K3SNP would-block ($MODE) " --log-level 4
+if [ "$MODE" = "enforce" ]; then
+  iptables -t raw -A "$CHAIN" -j DROP
+fi
+iptables -t raw -A "$CHAIN" -j RETURN
+
+# Hook in once, first in PREROUTING, only for traffic arriving from the LAN. Traffic from pods
+# arrives on the CNI interface and is never touched.
+iptables -t raw -C PREROUTING -i "$IFACE" -p tcp -m multiport --dports "$PORTS" -j "$CHAIN" 2>/dev/null \
+  || iptables -t raw -I PREROUTING 1 -i "$IFACE" -p tcp -m multiport --dports "$PORTS" -j "$CHAIN"
