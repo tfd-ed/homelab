@@ -37,6 +37,7 @@
     synthetic_dir: /opt/synthetic
     textfile_dir: /var/lib/node_exporter/textfile_collector
     prod_site: "https://tfdevs.com"
+    prod_api: "https://api.tfdevs.com"
     dev_site: "https://dev.tfdevs.com"
     dev_api: "https://api-dev.tfdevs.com"
     dev_user: "{{ lookup('ansible.builtin.env', 'SYNTHETIC_DEV_USER') }}"
@@ -96,6 +97,7 @@
         mode: "0600"
         content: |
           SYNTH_PROD_SITE={{ prod_site }}
+          SYNTH_PROD_API={{ prod_api }}
           SYNTH_DEV_SITE={{ dev_site }}
           SYNTH_DEV_API={{ dev_api }}
           SYNTH_DEV_USER={{ dev_user }}
@@ -178,11 +180,13 @@
         enabled: true
         state: started
 
+    # `systemctl start` on a oneshot unit waits for the run to end (about two minutes). Exit status 1
+    # ("a journey failed") is a result, not a failure of this playbook.
     - name: Run the journeys once now
-      systemd:
-        name: synthetic.service
-        state: started
-      # A oneshot unit: this returns when the run has finished.
+      command: systemctl start synthetic.service
+      changed_when: true
+      async: 600
+      poll: 5
 
     - name: Read the results through node-exporter
       uri:

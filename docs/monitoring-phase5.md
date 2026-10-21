@@ -243,7 +243,7 @@ Requiring the short window as well as the long one is what stops a blip from pag
 | Environment | Journey | Passes when |
 |---|---|---|
 | prod, dev | `home` | the page answers, has a title, shows content and is not the error page |
-| prod, dev | `courses`, `course-detail` | the list has a course, and opening the first one shows its heading |
+| prod, dev | `academy`, `course-detail` | the academy page loads, the public API lists a published course, and that course's page loads with real content (the cards are buttons, not links, so the course comes from `GET /courses/published`) |
 | prod, dev | `article` | the article list works; the first article opens if there is one |
 | prod, dev | `certificate-verify` | the verify page has its input |
 | prod, dev | `health-ready` | `/api/health/ready` answers 200 |
@@ -270,7 +270,7 @@ Results are textfile metrics (`synthetic_success`, `synthetic_duration_seconds`,
 
 One failed run alerts nobody: a page can fail once for a reason nobody needs to know. If a journey fails for a real reason, the screenshot and `journalctl -u synthetic` say which step. If one flaps, fix the journey (`journeys.mjs`) rather than raising the thresholds.
 
-**Not verified on the real hosts.** The runner was tested in the Playwright image against a stand-in site (passes, failures, the error-page marker, state and metrics file), and the alerts with promtool. It has not run against tfdevs.com, and the dev sign-in has not run at all: the first thing to check after applying is `journalctl -u synthetic`, and that a login cookie set by the API on `api-dev.tfdevs.com` is accepted by `dev.tfdevs.com` (same cookie domain).
+**Not verified on the real hosts.** The runner was tested in the Playwright image against a stand-in site (passes, failures, the error-page marker, state and metrics file), and the alerts with promtool. The first real run on 2026-10-21 found two wrong assumptions, both fixed: `/courses` is an empty stub (the course list is `/academy`), and a course page has no reliable `h1`; it also showed that pages with a long-lived connection never go network-idle, so the wait is capped at 5 s. After the fix the public journeys passed against tfdevs.com and dev.tfdevs.com. The dev sign-in has not run at all: the first thing to check after applying is `journalctl -u synthetic`, and that a login cookie set by the API on `api-dev.tfdevs.com` is accepted by `dev.tfdevs.com` (same cookie domain).
 
 ## Slice C: how it was checked
 

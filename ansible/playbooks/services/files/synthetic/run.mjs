@@ -2,6 +2,7 @@
 // Started every 10 minutes by a systemd timer (synthetic-setup.yml), in the Playwright container.
 //
 //   SYNTH_PROD_SITE      https://tfdevs.com            public journeys on production (skip when empty)
+//   SYNTH_PROD_API       https://api.tfdevs.com        API of production, to find a published course (read only)
 //   SYNTH_DEV_SITE       https://dev.tfdevs.com        public journeys on dev (skip when empty)
 //   SYNTH_DEV_API        https://api-dev.tfdevs.com    API of dev, for the sign-in
 //   SYNTH_DEV_USER/PASS  a dedicated dev account; the signed-in journeys are skipped without them
@@ -21,10 +22,10 @@ const artifactsDir = env.SYNTH_ARTIFACTS_DIR || '/artifacts'
 const only = env.SYNTH_ONLY ? new Set(env.SYNTH_ONLY.split(',')) : undefined
 
 const journeys = []
-if (env.SYNTH_PROD_SITE) journeys.push(...publicJourneys('prod', env.SYNTH_PROD_SITE.replace(/\/$/, '')))
+if (env.SYNTH_PROD_SITE) journeys.push(...publicJourneys('prod', env.SYNTH_PROD_SITE.replace(/\/$/, ''), env.SYNTH_PROD_API?.replace(/\/$/, '')))
 if (env.SYNTH_DEV_SITE) {
   const base = env.SYNTH_DEV_SITE.replace(/\/$/, '')
-  journeys.push(...publicJourneys('dev', base))
+  journeys.push(...publicJourneys('dev', base, env.SYNTH_DEV_API?.replace(/\/$/, '')))
   if (env.SYNTH_DEV_API && env.SYNTH_DEV_USER && env.SYNTH_DEV_PASS) {
     journeys.push(...signedInJourneys('dev', base, env.SYNTH_DEV_API.replace(/\/$/, ''), {
       username: env.SYNTH_DEV_USER,
