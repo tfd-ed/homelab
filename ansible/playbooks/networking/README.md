@@ -38,7 +38,7 @@ sudo systemctl enable --now cloudflared
 
 ### database-firewall.yml
 
-Restricts who can reach the database VM's Docker-published ports (Mongo 27017, Redis 6379, Postgres 5432, MySQL 3306, exporters 9121/9187/9216). UFW cannot do this for Docker ports, so it uses the `DOCKER-USER` chain via a dedicated `DB-FIREWALL` chain and the `db-firewall` systemd unit.
+Restricts who can reach the database VM's Docker-published ports (Mongo 27017, Redis 6379, Postgres 5432, exporters 9121/9187/9216). UFW cannot do this for Docker ports, so it uses the `DOCKER-USER` chain via a dedicated `DB-FIREWALL` chain and the `db-firewall` systemd unit.
 
 - Allowed on the data ports: K3s nodes, monitoring VM, n8n VM, plus `db_firewall_extra_sources`. Exporter ports: monitoring VM only.
 - Two steps. `db_firewall_mode=log` (default) only logs what it would block (`journalctl -k | grep "DBFW would-block"`); add every legitimate client to `db_firewall_extra_sources`, watch a few days, then re-run with `-e db_firewall_mode=enforce`.

@@ -40,7 +40,7 @@ tests:
   - name: a failed last run warns once it has lasted five minutes
     interval: 1m
     input_series:
-      - series: 'backup_last_run_success{backup="mysql", instance="db:9100"}'
+      - series: 'backup_last_run_success{backup="postgres", instance="db:9100"}'
         values: '1 1 0 0 0 0 0 0 0 0'
     alert_rule_test:
       - eval_time: 4m
@@ -49,10 +49,10 @@ tests:
       - eval_time: 9m
         alertname: BackupLastRunFailed
         exp_alerts:
-          - exp_labels: {severity: warning, backup: mysql, instance: "db:9100"}
+          - exp_labels: {severity: warning, backup: postgres, instance: "db:9100"}
             exp_annotations:
-              summary: "The last mysql backup run failed"
-              description: "The mysql job failed in its most recent run on db:9100. The previous good backup is kept. If this is still failing tomorrow, BackupStale pages. See /var/log/db-backup.log."
+              summary: "The last postgres backup run failed"
+              description: "The postgres job failed in its most recent run on db:9100. The previous good backup is kept. If this is still failing tomorrow, BackupStale pages. See /var/log/db-backup.log."
               runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
 
   - name: a backup under half its usual size warns, a normal one does not

@@ -2,7 +2,7 @@
 #
 # The series come from the database VM's backup script (playbooks/services/database-setup.yml,
 # /opt/databases/backup.sh, run by cron at 02:00), which writes them to node-exporter's textfile
-# collector. `backup` is the job (postgres, mysql, mongodb, redis, minio). A backup counts as a
+# collector. `backup` is the job (postgres, mongodb, redis, minio). A backup counts as a
 # success only when the command succeeded and the file is not empty.
 #
 # Deployed verbatim by playbooks/services/monitoring-setup.yml (`copy`). Validate with:

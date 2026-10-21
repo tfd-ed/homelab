@@ -5,13 +5,12 @@ Application services, databases, monitoring, and CI/CD pipeline setup.
 ## Playbooks
 
 ### database-setup.yml
-**Purpose:** Deploy centralized database server with PostgreSQL, MySQL, MongoDB  
+**Purpose:** Deploy centralized database server with PostgreSQL, MongoDB, Redis, MinIO (MySQL retired 2026-10-21)  
 **Target:** database-vm (192.168.100.205)  
 **Usage:** `ansible-playbook playbooks/services/database-setup.yml`
 
 **Deploys:**
 - PostgreSQL 16 (port 5432)
-- MySQL 8.0 (port 3306)
 - MongoDB 7.0 (port 27017)
 - Automated daily backups (2 AM)
 - 7-day backup retention

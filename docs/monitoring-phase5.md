@@ -13,12 +13,18 @@ Part of the observability plan (`tfd-blog-next/docs/OBSERVABILITY_CONTROL_ROOM_P
 
 `/opt/databases/backup.sh` (cron, 02:00, written by `playbooks/services/database-setup.yml`) used to run five jobs and print "Backup completed" whatever happened. A failed dump behind `| gzip` left a small valid-looking file. Now:
 
-- Each job (`postgres`, `mysql`, `mongodb`, `redis`, `minio`) succeeds only if its command succeeded (`pipefail`) **and** wrote a non-empty file. A failed job's file is deleted, so a truncated dump never sits among the backups.
+- Each job (`postgres`, `mongodb`, `redis`, `minio`) succeeds only if its command succeeded (`pipefail`) **and** wrote a non-empty file. A failed job's file is deleted, so a truncated dump never sits among the backups.
 - The time and size of the last success of each job are kept in `/opt/databases/backups/.state/<job>`, so a failed night does not erase the memory of the last good one. The 7-day cleanup never touches them.
 - After the jobs, the script writes `/var/lib/node_exporter/textfile_collector/db_backup.prom` (written aside and renamed). It exits 1 if any job failed, which shows in `/var/log/db-backup.log`.
 - The Redis job now waits for `BGSAVE` to finish (`rdb_bgsave_in_progress:0`, `rdb_last_bgsave_status:ok`) before copying `dump.rdb`. The old version copied after a fixed 5 s sleep.
 
 `playbooks/services/database-exporters-setup.yml` now also runs **node-exporter** on the database VM (port 9100) with the textfile collector on that directory. It runs on the bridge network with a published port, so the DOCKER-USER firewall of `networking/database-firewall.yml` filters it like the other exporters (9100 is in `db_firewall_exporter_ports`); the network collectors are off because they would describe the container. It also gives you host metrics for the VM (CPU, memory, disk) that did not exist before. `monitoring-setup.yml` scrapes it as job `node-exporter-database`, and `ScrapeTargetDown` covers it.
+
+### MySQL was removed (2026-10-21)
+
+The first night the new script ran, `BackupLastRunFailed` fired for `mysql`. The cause was not the script: `mysqldump` got `ERROR 1045: Access denied for user 'root'`, and so did the container's own `MYSQL_ROOT_PASSWORD`, because MySQL only reads that variable when its data directory is created and the stored root password was different. Going back through `/var/log/db-backup.log`, the same error had been there every night since at least 16 Oct, and the "backups" were 20-byte empty gzip files that the old script reported as completed. The instance held only MySQL's own schemas and no project referenced it, so it was removed rather than repaired: `database-setup.yml` no longer deploys it, no longer backs it up, and no longer opens port 3306 (also removed from `db_firewall_data_ports`); on a host that still has it, the playbook removes the container and the UFW rule. `/opt/databases/mysql/data` is left on disk (about 206 MB, empty instance); delete it by hand when you are sure. `MYSQL_ROOT_PASSWORD` is no longer used. Old `mysql_*.sql.gz` files age out under the 7-day cleanup, and the `mysql` series disappeared from `db_backup.prom` on the first script run after the change.
+
+If a MySQL is ever needed again, create it with a password you record, and check the first backup by restoring it (the monthly restore test below).
 
 ### Metrics
 

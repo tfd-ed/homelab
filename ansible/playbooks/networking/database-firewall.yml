@@ -1,7 +1,7 @@
 ---
 # Host firewall for the database VM's published ports (incident 2026-10-16 follow-up).
 #
-# Why not UFW: Mongo, Redis, Postgres and MySQL run in Docker with `ports: 27017:27017` and so on.
+# Why not UFW: Mongo, Redis and Postgres run in Docker with `ports: 27017:27017` and so on.
 # Docker publishes those through NAT, so the packets go through the FORWARD chain and never see
 # UFW's INPUT rules. The old `ufw allow` tasks in services/database-setup.yml therefore never
 # protected anything (and UFW is inactive on this VM). The supported hook is the DOCKER-USER chain,
@@ -15,7 +15,7 @@
 # Nothing else is touched: SSH, container-to-container traffic and other DOCKER-USER rules stay.
 #
 # Allowed sources:
-#   data ports  27017 6379 5432 3306 : K3s nodes, monitoring VM, n8n VM, + db_firewall_extra_sources
+#   data ports  27017 6379 5432 : K3s nodes, monitoring VM, n8n VM, + db_firewall_extra_sources
 #   exporters   9100 9121 9187 9216  : monitoring VM only (Prometheus scrapes them)
 #
 # TWO STEPS, so a forgotten client can never cause an outage:
@@ -42,7 +42,7 @@
     db_firewall_iface: ""             # empty = the interface of the default route (eth0)
     # Your workstation(s) and any other legitimate client, as IPs or CIDRs. Fill in what the log shows.
     db_firewall_extra_sources: []
-    db_firewall_data_ports: [27017, 6379, 5432, 3306]
+    db_firewall_data_ports: [27017, 6379, 5432]
     db_firewall_exporter_ports: [9100, 9121, 9187, 9216]
     db_firewall_data_hosts: "{{ groups['k8s'] + ['monitoring', 'n8n'] }}"
     db_firewall_exporter_hosts: ["monitoring"]

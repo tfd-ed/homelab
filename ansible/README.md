@@ -149,7 +149,7 @@ Kubernetes cluster deployment:
 
 ### 🚀 [Services](playbooks/services/)
 Application services and infrastructure components:
-- **database-setup.yml** - PostgreSQL, MySQL, MongoDB on dedicated VM
+- **database-setup.yml** - PostgreSQL, MongoDB, Redis, MinIO on dedicated VM
 - **monitoring-setup.yml** - Prometheus + Grafana + Node Exporter
 - **monitoring-dashboards-setup.yml** - Auto-provision 8 Grafana dashboards
 - **n8n-setup.yml** - n8n workflow automation platform
@@ -419,10 +419,9 @@ docker push 192.168.100.240:5000/myapp:latest
 - Run any build command (npm, pip, make, etc.)
 
 ### database-setup.yml
-Sets up centralized database server with PostgreSQL, MySQL, and MongoDB:
+Sets up centralized database server with PostgreSQL, MongoDB, Redis and MinIO (MySQL was retired on 2026-10-21; the playbook removes the container if it is still there):
 - Installs Docker CE for containerized databases
 - Deploys PostgreSQL 16 on port 5432
-- Deploys MySQL 8.0 on port 3306
 - Deploys MongoDB 7.0 on port 27017
 - Creates proper data directories and volumes
 - Configures automated daily backups at 2 AM
@@ -440,7 +439,6 @@ Sets up centralized database server with PostgreSQL, MySQL, and MongoDB:
 ```bash
 # Set secure passwords before running
 export POSTGRES_PASSWORD=your_secure_password
-export MYSQL_ROOT_PASSWORD=your_secure_password
 export MONGO_ROOT_PASSWORD=your_secure_password
 
 # Setup database server
@@ -450,16 +448,12 @@ ansible-playbook database-setup.yml
 # PostgreSQL
 psql -h 192.168.100.205 -U postgres -d database_name
 
-# MySQL
-mysql -h 192.168.100.205 -u root -p
-
 # MongoDB
 mongosh mongodb://admin:password@192.168.100.205:27017
 ```
 
 **Features:**
 - **PostgreSQL**: Alpine-based lightweight container
-- **MySQL**: Official MySQL 8.0 image
 - **MongoDB**: Official MongoDB 7.0 image
 - **Backups**: Automated daily backups with 7-day retention
 - **Health checks**: Container health monitoring
@@ -476,9 +470,6 @@ sudo /opt/databases/backup.sh
 ```bash
 # PostgreSQL
 postgresql://postgres:password@192.168.100.205:5432/dbname
-
-# MySQL
-mysql://root:password@192.168.100.205:3306/dbname
 
 # MongoDB
 mongodb://admin:password@192.168.100.205:27017/dbname
@@ -588,7 +579,7 @@ docker logs -f n8n      # View logs
 - `[vms]` - All VM instances
 - `[app-gateway]` - Reverse proxy VM (nginx, 1C/2GB)
 - `[k8s]` - Kubernetes cluster nodes (master + workers)
-- `[database]` - Database server VM (PostgreSQL, MySQL, MongoDB, 4C/8GB)
+- `[database]` - Database server VM (PostgreSQL, MongoDB, Redis, MinIO, 4C/8GB)
 - `[ci-cd]` - CI/CD VM (GitHub/GitLab runners, Docker registry)
 - Groups can be combined: `vms:!app-gateway` excludes gateway from operations
 
@@ -597,7 +588,7 @@ docker logs -f n8n      # View logs
 Completed playbooks:
 - ✅ K3s Kubernetes cluster with ingress-nginx
 - ✅ Monitoring stack (Prometheus + Grafana with auto-provisioned dashboards)
-- ✅ Database server (PostgreSQL, MySQL, MongoDB)
+- ✅ Database server (PostgreSQL, MongoDB, Redis, MinIO)
 - ✅ n8n workflow automation
 - ✅ CI/CD environment (GitHub Actions runner + Docker registry)
 - ✅ Docker installation across VMs

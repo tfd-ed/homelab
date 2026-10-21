@@ -282,7 +282,7 @@ The script will:
 Access the admin UI at http://192.168.100.210:81. You will be asked to create an admin account on first login. Use this UI to configure reverse proxy rules for your Kubernetes services.
 
 ### 5. Setup Database Server VM
-This will install PostgreSQL, MySQL, and MongoDB on the database server VM. Create `.env` from the provided `.env.example` in the `ansible` directory and set secure passwords for each database. Then run the prepared script to setup the databases.
+This will install PostgreSQL, MongoDB, Redis and MinIO (MySQL was removed on 2026-10-21: nothing used it) on the database server VM. Create `.env` from the provided `.env.example` in the `ansible` directory and set secure passwords for each database. Then run the prepared script to setup the databases.
 
 ```bash
 chmod ./script/run-database-setup.sh
@@ -387,7 +387,7 @@ Two host firewalls close paths that the normal setup leaves open to the whole LA
 
 | Playbook | Runs on | Guards | Allowed sources |
 |---|---|---|---|
-| `database-firewall.yml` (`db_firewall_*`) | database VM | Mongo 27017, Redis 6379, Postgres 5432, MySQL 3306; exporters 9121/9187/9216 | K3s nodes, monitoring VM, n8n VM (+ extras); exporters: monitoring VM only |
+| `database-firewall.yml` (`db_firewall_*`) | database VM | Mongo 27017, Redis 6379, Postgres 5432; exporters 9121/9187/9216 | K3s nodes, monitoring VM, n8n VM (+ extras); exporters: monitoring VM only |
 | `k3s-nodeport-firewall.yml` (`np_firewall_*`) | every K3s node | ingress NodePorts 30389 (http), 31943 (https) | gateway VM, K3s nodes, monitoring VM (+ extras) |
 
 ```bash
@@ -478,13 +478,11 @@ kubectl run -it --rm psql-test --image=postgres:16 --restart=Never -- \
 
 # Test from local machine
 psql -h 192.168.100.205 -U postgres -d postgres
-mysql -h 192.168.100.205 -u root -p
 mongosh mongodb://192.168.100.205:27017
 
 # Check database services are running
 ssh user@192.168.100.205
 sudo systemctl status postgresql
-sudo systemctl status mysql
 sudo systemctl status mongod
 
 # Check firewall rules. UFW does not apply to Docker-published ports; use the DB-FIREWALL chain
@@ -495,7 +493,7 @@ sudo journalctl -k --since "-1 day" | grep "DBFW would-block"
 # playbooks/networking/database-firewall.yml (or roll back: -e db_firewall_state=absent)
 
 # Verify databases are listening on all interfaces
-sudo netstat -tlnp | grep -E '5432|3306|27017'
+sudo netstat -tlnp | grep -E '5432|27017'
 # Should show 0.0.0.0:PORT, not 127.0.0.1:PORT
 ```
 
@@ -515,22 +513,7 @@ sudo netstat -tlnp | grep -E '5432|3306|27017'
    sudo systemctl restart postgresql
    ```
 
-2. **MySQL Binding to Localhost Only:**
-   ```bash
-   # Edit MySQL config
-   sudo nano /etc/mysql/mysql.conf.d/mysqld.cnf
-   # Set: bind-address = 0.0.0.0
-   
-   # Restart MySQL
-   sudo systemctl restart mysql
-   
-   # Grant remote access
-   mysql -u root -p
-   GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' IDENTIFIED BY 'password';
-   FLUSH PRIVILEGES;
-   ```
-
-3. **MongoDB Not Allowing Remote Connections:**
+2. **MongoDB Not Allowing Remote Connections:**
    ```bash
    # Edit mongod.conf
    sudo nano /etc/mongod.conf

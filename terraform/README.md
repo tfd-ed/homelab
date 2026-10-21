@@ -34,7 +34,7 @@ This Terraform configuration automates the creation of a complete homelab infras
 | k8s-master | 2 | 4GB | 50GB | 192.168.100.201 | Kubernetes control plane (K3s) |
 | k8s-worker-1 | 4 | 14GB | 150GB | 192.168.100.202 | Kubernetes worker node |
 | k8s-worker-2 | 4 | 14GB | 150GB | 192.168.100.203 | Kubernetes worker node |
-| **database-vm** | **4** | **6GB** | **200GB** | **192.168.100.205** | **PostgreSQL + MySQL + MongoDB** |
+| **database-vm** | **4** | **6GB** | **200GB** | **192.168.100.205** | **PostgreSQL + MongoDB + Redis + MinIO** |
 | app-gateway | 1 | 2GB | 20GB | 192.168.100.210 | Nginx reverse proxy |
 | monitoring | 2 | 6GB | 80GB | 192.168.100.220 | Prometheus + Grafana + Loki |
 | n8n | 2 | 6GB | 50GB | 192.168.100.230 | n8n workflow automation |

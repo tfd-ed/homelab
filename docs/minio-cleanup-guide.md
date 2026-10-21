@@ -120,7 +120,7 @@ ssh ubuntu@192.168.100.205 "df -h /opt/databases"
 
 ```bash
 ssh ubuntu@192.168.100.205 "docker ps"
-# Should show: postgres, mysql, mongodb, redis, postgres-exporter
+# Should show: postgres, mongodb, redis, postgres-exporter
 ```
 
 ## Rollback (If Needed)

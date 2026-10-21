@@ -4,16 +4,12 @@
   become: yes
   vars:
     postgres_version: "16"
-    mysql_version: "8.4"
     mongo_version: "8.2"
     redis_version: "8.2.1"
     minio_version: "latest"
     # Default passwords - CHANGE THESE IN PRODUCTION
     postgres_password: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') |
       default('changeme_postgres', true) }}"
-    mysql_root_password:
-      "{{ lookup('ansible.builtin.env', 'MYSQL_ROOT_PASSWORD') |
-      default('changeme_mysql', true) }}"
     mongo_root_password:
       "{{ lookup('ansible.builtin.env', 'MONGO_ROOT_PASSWORD') |
       default('changeme_mongo', true) }}"
@@ -52,7 +48,6 @@
       loop:
         - /opt/databases
         - /opt/databases/postgres/data
-        - /opt/databases/mysql/data
         - /opt/databases/mongo/data
         - /opt/databases/redis/data
         - /opt/databases/minio/data
@@ -86,25 +81,21 @@
           timeout: 5s
           retries: 5
 
-    - name: Deploy MySQL container
+    # MySQL was removed (2026-10-21): nothing used it, its root password no longer matched the one in
+    # this playbook, and its backup had never worked. These tasks clean up a host that still has it.
+    # /opt/databases/mysql/data is kept on disk (empty instance, 206 MB); delete it by hand when sure.
+    - name: Remove the retired MySQL container
       docker_container:
         name: mysql
-        image: "mysql:{{ mysql_version }}"
-        state: started
-        restart_policy: unless-stopped
-        ports:
-          - "3306:3306"
-        env:
-          MYSQL_ROOT_PASSWORD: "{{ mysql_root_password }}"
-        volumes:
-          - /opt/databases/mysql/data:/var/lib/mysql
-        networks:
-          - name: db_network
-        healthcheck:
-          test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-          interval: 10s
-          timeout: 5s
-          retries: 5
+        state: absent
+
+    - name: Close the retired MySQL port in UFW
+      ufw:
+        rule: allow
+        port: "3306"
+        proto: tcp
+        delete: true
+      when: ansible_facts.services['ufw'] is defined
 
     - name: Deploy MongoDB container
       docker_container:
@@ -227,7 +218,7 @@
           STATE_DIR="${BACKUP_DIR}/.state"
           TEXTFILE_DIR="/var/lib/node_exporter/textfile_collector"
           DATE=$(date +%Y%m%d_%H%M%S)
-          JOBS="postgres mysql mongodb redis minio"
+          JOBS="postgres mongodb redis minio"
           mkdir -p "${STATE_DIR}" "${TEXTFILE_DIR}"
 
           declare -A RUN_OK
@@ -249,10 +240,6 @@
 
           backup_postgres() {
             docker exec postgres pg_dumpall -U postgres | gzip > "$1"
-          }
-
-          backup_mysql() {
-            docker exec mysql mysqldump -u root -p{{ mysql_root_password }} --all-databases | gzip > "$1"
           }
 
           backup_mongodb() {
@@ -284,7 +271,6 @@
           }
 
           job postgres "${BACKUP_DIR}/postgres_${DATE}.sql.gz" backup_postgres
-          job mysql    "${BACKUP_DIR}/mysql_${DATE}.sql.gz"    backup_mysql
           job mongodb  "${BACKUP_DIR}/mongodb_${DATE}.tar.gz"  backup_mongodb
           job redis    "${BACKUP_DIR}/redis_${DATE}.rdb"       backup_redis
           job minio    "${BACKUP_DIR}/minio_${DATE}.tar.gz"    backup_minio
@@ -347,14 +333,6 @@
         comment: "PostgreSQL"
       when: ansible_facts.services['ufw'] is defined
 
-    - name: Configure UFW - Allow MySQL
-      ufw:
-        rule: allow
-        port: "3306"
-        proto: tcp
-        comment: "MySQL"
-      when: ansible_facts.services['ufw'] is defined
-
     - name: Configure UFW - Allow MongoDB
       ufw:
         rule: allow
@@ -397,10 +375,6 @@
           - "  User: postgres"
           - "  Password: {{ postgres_password }}"
           - ""
-          - "MySQL: {{ ansible_host }}:3306"
-          - "  User: root"
-          - "  Password: {{ mysql_root_password }}"
-          - ""
           - "MongoDB: {{ ansible_host }}:27017"
           - "  User: admin"
           - "  Password: {{ mongo_root_password }}"
@@ -416,7 +390,6 @@
           - "⚠️  IMPORTANT: Change default passwords in production!"
           - "⚠️  Set environment variables before running:"
           - "   export POSTGRES_PASSWORD=your_secure_password"
-          - "   export MYSQL_ROOT_PASSWORD=your_secure_password"
           - "   export MONGO_ROOT_PASSWORD=your_secure_password"
           - "   export REDIS_PASSWORD=your_secure_password"
           - "   export MINIO_ROOT_USER=your_admin_username"
