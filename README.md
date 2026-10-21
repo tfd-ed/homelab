@@ -147,7 +147,7 @@ homelab-journey/
 │           └── files/                         # scripts/units the firewall playbooks install
 ├── script/             # Helper scripts (run-*-setup.sh wrappers, SSH key generation,
 │                       #   k8s/Cloudflare setup, MinIO migration, known_hosts cleanup)
-├── docs/               # monitoring runbooks (monitoring-phase0..4.md), n8n workflows/agents, MinIO guides, bootcamp registration docs
+├── docs/               # monitoring runbooks (monitoring-phase0..4.md), incident runbooks (docs/runbooks/), n8n workflows/agents, MinIO guides, bootcamp registration docs
 ├── diagram/            # Infrastructure diagrams
 ```
 

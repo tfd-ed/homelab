@@ -35,7 +35,7 @@ tests:
             exp_annotations:
               summary: "No good mongodb backup for over 26 hours"
               description: "The last successful mongodb backup on db:9100 is older than 26 hours (the job runs daily at 02:00). Read /var/log/db-backup.log on the database VM and run /opt/databases/backup.sh by hand. Backups are on the same VM, so they do not survive losing it (observability plan, open decision 10)."
-              runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+              runbook: "homelab-journey/docs/runbooks/backup-stale.md"
 
   - name: a failed last run warns once it has lasted five minutes
     interval: 1m
@@ -53,7 +53,7 @@ tests:
             exp_annotations:
               summary: "The last postgres backup run failed"
               description: "The postgres job failed in its most recent run on db:9100. The previous good backup is kept. If this is still failing tomorrow, BackupStale pages. See /var/log/db-backup.log."
-              runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+              runbook: "homelab-journey/docs/runbooks/backup-stale.md"
 
   - name: a backup under half its usual size warns, a normal one does not
     interval: 1m
@@ -75,7 +75,7 @@ tests:
             exp_annotations:
               summary: "The postgres backup is less than half its usual size"
               description: "The last postgres backup file is under half the 7-day average. It may be incomplete. Open the file, and compare it with the one before in /opt/databases/backups."
-              runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+              runbook: "homelab-journey/docs/runbooks/backup-stale.md"
 
   - name: missing metrics warn only after 30 hours
     interval: 1h
