@@ -1,0 +1,112 @@
+# promtool unit tests for alerts/rum.yml. Run from the prometheus directory:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/rum.test.yml
+rule_files:
+  - ../alerts/rum.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: slow phone LCP with enough reports warns after 30 minutes
+    interval: 1m
+    input_series:
+      # Each minute 2 reports land: one under 2.5 s, one in the 4 to 6 s bucket, so p75 is over 4 s.
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="2.5"}'
+        values: '0+1x200'
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="4"}'
+        values: '0+1x200'
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="6"}'
+        values: '0+2x200'
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="+Inf"}'
+        values: '0+2x200'
+      - series: 'web_vitals_lcp_seconds_count{job="tfd-blog", env="prod", device="mobile", route="/"}'
+        values: '0+2x200'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: WebVitalsLcpPoorMobile
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: WebVitalsLcpPoorMobile
+        exp_alerts:
+          - exp_labels: {severity: warning, env: prod}
+            exp_annotations:
+              summary: "Phone visitors wait over 4 s for the main content (LCP p75)"
+              description: "The 75th percentile Largest Contentful Paint of phone visitors on prod has been over 4 seconds for 30 minutes. Look at the Web vitals row of the TFD Services dashboard for the slow routes, and at API latency and CPU throttling for a backend cause."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#web-vitals"
+
+  - name: fast LCP never warns, and desktop is not judged by the phone alert
+    interval: 1m
+    input_series:
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="2.5"}'
+        values: '0+4x200'
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="+Inf"}'
+        values: '0+4x200'
+      - series: 'web_vitals_lcp_seconds_count{job="tfd-blog", env="prod", device="mobile", route="/"}'
+        values: '0+4x200'
+      # Desktop is slow, but this alert is about phones.
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="desktop", route="/", le="4"}'
+        values: '0+0x200'
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="desktop", route="/", le="+Inf"}'
+        values: '0+10x200'
+      - series: 'web_vitals_lcp_seconds_count{job="tfd-blog", env="prod", device="desktop", route="/"}'
+        values: '0+10x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: WebVitalsLcpPoorMobile
+        exp_alerts: []
+
+  - name: a slow window with too few reports says nothing
+    interval: 1m
+    input_series:
+      # About 6 reports in 30 minutes, all slow: under the 30-report floor.
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="4"}'
+        values: '0x200'
+      - series: 'web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="+Inf"}'
+        values: '0+0.2x200'
+      - series: 'web_vitals_lcp_seconds_count{job="tfd-blog", env="prod", device="mobile", route="/"}'
+        values: '0+0.2x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: WebVitalsLcpPoorMobile
+        exp_alerts: []
+
+  - name: poor INP warns
+    interval: 1m
+    input_series:
+      - series: 'web_vitals_inp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="0.2"}'
+        values: '0+0x200'
+      - series: 'web_vitals_inp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="1"}'
+        values: '0+2x200'
+      - series: 'web_vitals_inp_seconds_bucket{job="tfd-blog", env="prod", device="mobile", route="/", le="+Inf"}'
+        values: '0+2x200'
+      - series: 'web_vitals_inp_seconds_count{job="tfd-blog", env="prod", device="mobile", route="/"}'
+        values: '0+2x200'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: WebVitalsInpPoorMobile
+        exp_alerts:
+          - exp_labels: {severity: warning, env: prod}
+            exp_annotations:
+              summary: "Phone visitors see slow reactions to taps (INP p75 over 500 ms)"
+              description: "The 75th percentile Interaction to Next Paint of phone visitors on prod has been over 500 ms for 30 minutes. Usually too much JavaScript on a route: check the Web vitals row for the route and the latest deploy on the Deployments page."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#web-vitals"
+
+  - name: poor CLS warns
+    interval: 1m
+    input_series:
+      - series: 'web_vitals_cls_bucket{job="tfd-blog", env="prod", device="desktop", route="/", le="0.1"}'
+        values: '0+0x200'
+      - series: 'web_vitals_cls_bucket{job="tfd-blog", env="prod", device="desktop", route="/", le="0.5"}'
+        values: '0+3x200'
+      - series: 'web_vitals_cls_bucket{job="tfd-blog", env="prod", device="desktop", route="/", le="+Inf"}'
+        values: '0+3x200'
+      - series: 'web_vitals_cls_count{job="tfd-blog", env="prod", device="desktop", route="/"}'
+        values: '0+3x200'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: WebVitalsClsPoor
+        exp_alerts:
+          - exp_labels: {severity: warning, env: prod}
+            exp_annotations:
+              summary: "The page layout jumps while loading (CLS p75 over 0.25)"
+              description: "The 75th percentile Cumulative Layout Shift on prod has been over 0.25 for 30 minutes. A recent deploy that added an image, banner or font without reserved space is the usual cause."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#web-vitals"

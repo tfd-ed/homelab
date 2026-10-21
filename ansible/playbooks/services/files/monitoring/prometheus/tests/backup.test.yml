@@ -1,0 +1,96 @@
+# promtool unit tests for alerts/backup.yml. Run from the prometheus directory:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/backup.test.yml
+rule_files:
+  - ../alerts/backup.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: a backup that is fresh stays quiet
+    interval: 1m
+    input_series:
+      - series: 'backup_last_success_timestamp_seconds{backup="postgres", instance="db:9100"}'
+        values: '0+0x600'
+      - series: 'backup_last_run_success{backup="postgres", instance="db:9100"}'
+        values: '1x600'
+    alert_rule_test:
+      # time() is 600 s at eval_time 10m, the timestamp is 0: 600 s old, well under 26 hours.
+      - eval_time: 10m
+        alertname: BackupStale
+        exp_alerts: []
+
+  - name: a backup older than 26 hours pages after the pending time
+    interval: 1m
+    input_series:
+      - series: 'backup_last_success_timestamp_seconds{backup="mongodb", instance="db:9100"}'
+        values: '0x1700'
+    alert_rule_test:
+      - eval_time: 26h
+        alertname: BackupStale
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: BackupStale
+        exp_alerts:
+          - exp_labels: {severity: critical, backup: mongodb, instance: "db:9100"}
+            exp_annotations:
+              summary: "No good mongodb backup for over 26 hours"
+              description: "The last successful mongodb backup on db:9100 is older than 26 hours (the job runs daily at 02:00). Read /var/log/db-backup.log on the database VM and run /opt/databases/backup.sh by hand. Backups are on the same VM, so they do not survive losing it (observability plan, open decision 10)."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+
+  - name: a failed last run warns once it has lasted five minutes
+    interval: 1m
+    input_series:
+      - series: 'backup_last_run_success{backup="mysql", instance="db:9100"}'
+        values: '1 1 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BackupLastRunFailed
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: BackupLastRunFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, backup: mysql, instance: "db:9100"}
+            exp_annotations:
+              summary: "The last mysql backup run failed"
+              description: "The mysql job failed in its most recent run on db:9100. The previous good backup is kept. If this is still failing tomorrow, BackupStale pages. See /var/log/db-backup.log."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+
+  - name: a backup under half its usual size warns, a normal one does not
+    interval: 1m
+    input_series:
+      # postgres is about 1 MB for 4000 minutes, then drops to a tenth.
+      - series: 'backup_last_size_bytes{backup="postgres", instance="db:9100"}'
+        values: '1000000x4000 100000x200'
+      # redis is tiny and constant: under the 10 KB floor it is never judged.
+      - series: 'backup_last_size_bytes{backup="redis", instance="db:9100"}'
+        values: '500x4200'
+    alert_rule_test:
+      - eval_time: 3990m
+        alertname: BackupTooSmall
+        exp_alerts: []
+      - eval_time: 4100m
+        alertname: BackupTooSmall
+        exp_alerts:
+          - exp_labels: {severity: warning, backup: postgres, instance: "db:9100"}
+            exp_annotations:
+              summary: "The postgres backup is less than half its usual size"
+              description: "The last postgres backup file is under half the 7-day average. It may be incomplete. Open the file, and compare it with the one before in /opt/databases/backups."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+
+  - name: missing metrics warn only after 30 hours
+    interval: 1h
+    input_series:
+      - series: 'up{job="postgres"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 29h
+        alertname: BackupMetricsMissing
+        exp_alerts: []
+      - eval_time: 32h
+        alertname: BackupMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "No backup metrics are being published"
+              description: "Prometheus has no backup_last_run_timestamp_seconds. Check that node-exporter on the database VM mounts /var/lib/node_exporter/textfile_collector (playbooks/services/database-exporters-setup.yml) and that /opt/databases/backup.sh runs (cron, 02:00)."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#backups"

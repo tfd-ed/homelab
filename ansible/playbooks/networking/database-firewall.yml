@@ -16,7 +16,7 @@
 #
 # Allowed sources:
 #   data ports  27017 6379 5432 3306 : K3s nodes, monitoring VM, n8n VM, + db_firewall_extra_sources
-#   exporters   9121 9187 9216       : monitoring VM only (Prometheus scrapes them)
+#   exporters   9100 9121 9187 9216  : monitoring VM only (Prometheus scrapes them)
 #
 # TWO STEPS, so a forgotten client can never cause an outage:
 #   1. db_firewall_mode=log (default)  traffic that WOULD be blocked is only logged:
@@ -43,7 +43,7 @@
     # Your workstation(s) and any other legitimate client, as IPs or CIDRs. Fill in what the log shows.
     db_firewall_extra_sources: []
     db_firewall_data_ports: [27017, 6379, 5432, 3306]
-    db_firewall_exporter_ports: [9121, 9187, 9216]
+    db_firewall_exporter_ports: [9100, 9121, 9187, 9216]
     db_firewall_data_hosts: "{{ groups['k8s'] + ['monitoring', 'n8n'] }}"
     db_firewall_exporter_hosts: ["monitoring"]
     db_firewall_chain: DB-FIREWALL

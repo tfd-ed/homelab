@@ -1,0 +1,55 @@
+# Real-user performance alerts (observability plan, Phase 5.2.2).
+#
+# The series come from the Nuxt server (tfd-blog), which counts the Core Web Vitals the browsers
+# report to the first-party route /_t/vitals (tfd-blog-next server/utils/vitals.ts). Labels are the
+# route template and a device class (mobile, tablet, desktop); no country, IP or user.
+#   web_vitals_lcp_seconds, web_vitals_inp_seconds, web_vitals_ttfb_seconds   histograms, seconds
+#   web_vitals_cls                                                          histogram, unitless
+# The thresholds are Google's "poor" bounds (LCP 4 s, INP 500 ms, CLS 0.25) for the 75th percentile.
+# A quiet window says nothing, so each alert also needs at least 30 reports in the window.
+#
+# Deployed verbatim by playbooks/services/monitoring-setup.yml (`copy`). Validate with:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 check rules /w/alerts/rum.yml
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/rum.test.yml
+
+groups:
+  - name: web-vitals
+    rules:
+      - alert: WebVitalsLcpPoorMobile
+        expr: |
+          histogram_quantile(0.75, sum by (le, env) (rate(web_vitals_lcp_seconds_bucket{job="tfd-blog", env="prod", device="mobile"}[30m]))) > 4
+          and
+          sum by (env) (increase(web_vitals_lcp_seconds_count{job="tfd-blog", env="prod", device="mobile"}[30m])) >= 30
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Phone visitors wait over 4 s for the main content (LCP p75)"
+          description: "The 75th percentile Largest Contentful Paint of phone visitors on {{ $labels.env }} has been over 4 seconds for 30 minutes. Look at the Web vitals row of the TFD Services dashboard for the slow routes, and at API latency and CPU throttling for a backend cause."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#web-vitals"
+
+      - alert: WebVitalsInpPoorMobile
+        expr: |
+          histogram_quantile(0.75, sum by (le, env) (rate(web_vitals_inp_seconds_bucket{job="tfd-blog", env="prod", device="mobile"}[30m]))) > 0.5
+          and
+          sum by (env) (increase(web_vitals_inp_seconds_count{job="tfd-blog", env="prod", device="mobile"}[30m])) >= 30
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Phone visitors see slow reactions to taps (INP p75 over 500 ms)"
+          description: "The 75th percentile Interaction to Next Paint of phone visitors on {{ $labels.env }} has been over 500 ms for 30 minutes. Usually too much JavaScript on a route: check the Web vitals row for the route and the latest deploy on the Deployments page."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#web-vitals"
+
+      - alert: WebVitalsClsPoor
+        expr: |
+          histogram_quantile(0.75, sum by (le, env) (rate(web_vitals_cls_bucket{job="tfd-blog", env="prod"}[30m]))) > 0.25
+          and
+          sum by (env) (increase(web_vitals_cls_count{job="tfd-blog", env="prod"}[30m])) >= 30
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The page layout jumps while loading (CLS p75 over 0.25)"
+          description: "The 75th percentile Cumulative Layout Shift on {{ $labels.env }} has been over 0.25 for 30 minutes. A recent deploy that added an image, banner or font without reserved space is the usual cause."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#web-vitals"

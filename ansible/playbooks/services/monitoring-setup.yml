@@ -44,6 +44,24 @@
     telegram_thread_critical: "{{ lookup('ansible.builtin.env', 'TELEGRAM_THREAD_CRITICAL') | default('0', true) }}"
     telegram_thread_warning: "{{ lookup('ansible.builtin.env', 'TELEGRAM_THREAD_WARNING') | default('0', true) }}"
     heartbeat_url: "{{ lookup('ansible.builtin.env', 'HEARTBEAT_URL') }}"
+    # Second route for critical alerts, independent of Telegram (observability plan, Phase 5.5.2).
+    # Either, both or neither may be set. With neither, critical alerts go to Telegram only.
+    #   NTFY_URL     the topic URL, e.g. https://ntfy.sh/tfd-ops-<long random string>. On the public ntfy.sh
+    #                the topic name is the secret. NTFY_TOKEN is optional (a protected or self-hosted server).
+    #   ALERT_EMAIL_TO, SMTP_SMARTHOST (host:port), SMTP_FROM, SMTP_USERNAME, SMTP_PASSWORD
+    ntfy_url: "{{ lookup('ansible.builtin.env', 'NTFY_URL') | regex_replace('/+$', '') }}"
+    ntfy_token: "{{ lookup('ansible.builtin.env', 'NTFY_TOKEN') }}"
+    alert_email_to: "{{ lookup('ansible.builtin.env', 'ALERT_EMAIL_TO') }}"
+    smtp_smarthost: "{{ lookup('ansible.builtin.env', 'SMTP_SMARTHOST') }}"
+    smtp_from: "{{ lookup('ansible.builtin.env', 'SMTP_FROM') }}"
+    smtp_username: "{{ lookup('ansible.builtin.env', 'SMTP_USERNAME') }}"
+    smtp_password: "{{ lookup('ansible.builtin.env', 'SMTP_PASSWORD') }}"
+    email_backup_enabled: "{{ (alert_email_to | length > 0) and (smtp_smarthost | length > 0) and (smtp_from | length > 0) }}"
+    backup_route_enabled: "{{ (ntfy_url | length > 0) or (email_backup_enabled | bool) }}"
+    # ntfy fills the title and the message from Alertmanager's webhook body (its "templating"): the
+    # alert name and summary of every alert, urgent priority, and a link into the control room.
+    # Percent-encoded here because the Go template braces would collide with Jinja.
+    ntfy_query: "tpl=yes&priority=urgent&tags=rotating_light&t=%7B%7Bif%20eq%20.status%20%22firing%22%7D%7DFIRING%7B%7Belse%7D%7DRESOLVED%7B%7Bend%7D%7D%3A%20%7B%7B.groupLabels.alertname%7D%7D&m=%7B%7Brange%20.alerts%7D%7D%7B%7B.labels.alertname%7D%7D%7B%7Bif%20.labels.instance%7D%7D%20on%20%7B%7B.labels.instance%7D%7D%7B%7Bend%7D%7D%3A%20%7B%7B.annotations.summary%7D%7D%0A%7B%7Bend%7D%7D"
     # Origin of the site: alert messages get an "Open in control room" link to /admin/ops/alerts.
     # Defaults to production; set CONTROL_ROOM_URL to use another origin.
     control_room_url: "{{ lookup('ansible.builtin.env', 'CONTROL_ROOM_URL') | default('https://tfdevs.com', true) | regex_replace('/+$', '') }}"
@@ -63,6 +81,11 @@
     # Datastore exporters on database-vm (playbooks/services/database-exporters-setup.yml).
     mongodb_exporter_target: "192.168.100.205:9216"
     redis_exporter_target: "192.168.100.205:9121"
+    # node-exporter on the database VM: host metrics and the backup metrics (database-exporters-setup.yml).
+    node_exporter_database_target: "192.168.100.205:9100"
+    # Proxmox host (proxmox-exporter-setup.yml) and cloudflared on the gateway VM (cloudflared-metrics-setup.yml).
+    node_exporter_proxmox_target: "192.168.100.50:9100"
+    cloudflared_target: "192.168.100.210:20241"
     # MinIO's own metrics. Needs a bearer token (docs/monitoring-phase3.md): without
     # MINIO_PROMETHEUS_TOKEN in the environment the MinIO job is left out.
     minio_metrics_target: "192.168.100.206:9000"
@@ -118,6 +141,13 @@
       delegate_to: localhost
       become: no
       run_once: true
+
+    - name: Warn when critical alerts have no second route
+      debug:
+        msg: >-
+          Neither NTFY_URL nor the email settings are set. If Telegram is unreachable, critical alerts
+          reach nobody. See docs/monitoring-phase5.md, "A second route for critical alerts".
+      when: not (backup_route_enabled | bool)
 
     - name: Warn when no external heartbeat is configured
       debug:
@@ -198,6 +228,48 @@
         path: "{{ monitoring_dir }}/alertmanager/secrets/heartbeat_url"
         state: absent
       when: heartbeat_url | length == 0
+
+    - name: Write the ntfy publishing URL (it holds the topic, so it is a secret)
+      copy:
+        content: "{{ ntfy_url }}?{{ ntfy_query }}&click={{ (control_room_url ~ '/admin/ops/alerts') | urlencode }}"
+        dest: "{{ monitoring_dir }}/alertmanager/secrets/ntfy_url"
+        owner: "65534"
+        group: "65534"
+        mode: "0400"
+      when: ntfy_url | length > 0
+      no_log: true
+
+    - name: Write the ntfy token
+      copy:
+        content: "{{ ntfy_token }}"
+        dest: "{{ monitoring_dir }}/alertmanager/secrets/ntfy_token"
+        owner: "65534"
+        group: "65534"
+        mode: "0400"
+      when: ntfy_url | length > 0 and ntfy_token | length > 0
+      no_log: true
+
+    - name: Write the SMTP password
+      copy:
+        content: "{{ smtp_password }}"
+        dest: "{{ monitoring_dir }}/alertmanager/secrets/smtp_password"
+        owner: "65534"
+        group: "65534"
+        mode: "0400"
+      when: email_backup_enabled | bool and smtp_password | length > 0
+      no_log: true
+
+    - name: Remove second-route secrets that are no longer configured
+      file:
+        path: "{{ monitoring_dir }}/alertmanager/secrets/{{ item.file }}"
+        state: absent
+      loop:
+        - { file: ntfy_url, keep: "{{ ntfy_url | length > 0 }}" }
+        - { file: ntfy_token, keep: "{{ ntfy_url | length > 0 and ntfy_token | length > 0 }}" }
+        - { file: smtp_password, keep: "{{ (email_backup_enabled | bool) and smtp_password | length > 0 }}" }
+      when: not (item.keep | bool)
+      loop_control:
+        label: "{{ item.file }}"
 
     - name: Create Alertmanager configuration
       template:

@@ -28,6 +28,15 @@ route:
       receiver: telegram-critical
       group_wait: 15s
       repeat_interval: 1h
+{% if backup_route_enabled | bool %}
+      # Telegram and the second route each get every critical alert: a failure of one does not hide it.
+      continue: true
+    - matchers:
+        - severity = "critical"
+      receiver: critical-backup
+      group_wait: 15s
+      repeat_interval: 1h
+{% endif %}
     - matchers:
         - severity = "none"
       receiver: blackhole
@@ -72,3 +81,35 @@ receivers:
         disable_notifications: true
         send_resolved: true
         message: '{% raw %}{{ template "tfd.telegram.message" . }}{% endraw %}'
+
+{% if backup_route_enabled | bool %}
+  # A second way to reach you that does not depend on Telegram (observability plan, Phase 5.5.2).
+  - name: critical-backup
+{% if ntfy_url | length > 0 %}
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/ntfy_url
+        send_resolved: true
+        max_alerts: 20
+{% if ntfy_token | length > 0 %}
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/secrets/ntfy_token
+{% endif %}
+{% endif %}
+{% if email_backup_enabled | bool %}
+    email_configs:
+      - to: '{{ alert_email_to }}'
+        from: '{{ smtp_from }}'
+        smarthost: '{{ smtp_smarthost }}'
+{% if smtp_username | length > 0 %}
+        auth_username: '{{ smtp_username }}'
+{% endif %}
+{% if smtp_password | length > 0 %}
+        auth_password_file: /etc/alertmanager/secrets/smtp_password
+{% endif %}
+        send_resolved: true
+        headers:
+          Subject: '{% raw %}[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}{% endraw %}'
+{% endif %}
+{% endif %}

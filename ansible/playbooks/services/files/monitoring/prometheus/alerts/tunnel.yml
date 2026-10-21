@@ -1,0 +1,37 @@
+# Cloudflare Tunnel health from the inside (observability plan, Phase 5.1.6).
+#
+# cloudflared on the gateway VM publishes its own metrics once playbooks/networking/cloudflared-metrics-setup.yml
+# has set TUNNEL_METRICS (job cloudflared). The HTTP probes already catch a total outage from outside;
+# these catch the half-broken cases: fewer connections to Cloudflare's edge than normal, and a rising
+# share of requests that fail between the tunnel and the origin.
+#
+# Deployed verbatim by playbooks/services/monitoring-setup.yml (`copy`). Validate with:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 check rules /w/alerts/tunnel.yml
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/tunnel.test.yml
+
+groups:
+  - name: tunnel
+    rules:
+      # cloudflared normally keeps four connections to the edge. One left is one link failure away from an outage.
+      - alert: TunnelDegraded
+        expr: cloudflared_tunnel_ha_connections < 2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The Cloudflare tunnel has {{ $value }} connection(s) to the edge (normally 4)"
+          description: "cloudflared on {{ $labels.instance }} has fewer than 2 high-availability connections to Cloudflare for 5 minutes. Traffic may still flow on the rest, but one more failure is an outage. Check the gateway VM's internet access and systemctl status cloudflared."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#tunnel-metrics"
+
+      - alert: TunnelRequestErrors
+        expr: |
+          sum by (instance) (rate(cloudflared_tunnel_request_errors[10m]))
+            / sum by (instance) (rate(cloudflared_tunnel_total_requests[10m])) > 0.05
+          and sum by (instance) (rate(cloudflared_tunnel_total_requests[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 5% of requests fail between the tunnel and the origin"
+          description: "cloudflared on {{ $labels.instance }} counts more than 5% request errors for 10 minutes: Nginx Proxy Manager or an upstream refuses or drops connections. Check the gateway VM and the ingress NodePort."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#tunnel-metrics"

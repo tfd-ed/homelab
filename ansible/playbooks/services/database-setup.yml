@@ -197,40 +197,134 @@
           timeout: 10s
           retries: 3
 
+    # Where the backup script leaves its result for node-exporter's textfile collector
+    # (database-exporters-setup.yml mounts this directory; alerts/backup.yml reads the metrics).
+    - name: Create the node-exporter textfile directory
+      file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        mode: "0755"
+
+    # Observability plan, Phase 5.1.3. Each job is judged on its own: a job counts as a success only
+    # when the command succeeded (pipefail, so a failing dump behind `| gzip` is not hidden) and the
+    # file it wrote is not empty. A failed job's file is removed, so a truncated dump never sits
+    # among the backups looking valid. The time and size of the last success of each job are kept in
+    # backups/.state/<job> and published as metrics after every run (alerts/backup.yml).
+    # NOTE: do not write a Jinja comment opener (brace plus hash) in this script, Ansible would
+    # swallow it. Bash array length expressions contain exactly that.
     - name: Create backup script
       copy:
         dest: /opt/databases/backup.sh
         mode: "0755"
         content: |
           #!/bin/bash
-          # Database Backup Script
+          # Database Backup Script (managed by playbooks/services/database-setup.yml)
+          set -u
+          set -o pipefail
+          umask 022
+
           BACKUP_DIR="/opt/databases/backups"
+          STATE_DIR="${BACKUP_DIR}/.state"
+          TEXTFILE_DIR="/var/lib/node_exporter/textfile_collector"
           DATE=$(date +%Y%m%d_%H%M%S)
+          JOBS="postgres mysql mongodb redis minio"
+          mkdir -p "${STATE_DIR}" "${TEXTFILE_DIR}"
 
-          # PostgreSQL Backup
-          docker exec postgres pg_dumpall -U postgres | gzip > "${BACKUP_DIR}/postgres_${DATE}.sql.gz"
+          declare -A RUN_OK
+          FAILED=0
 
-          # MySQL Backup
-          docker exec mysql mysqldump -u root -p{{ mysql_root_password }} --all-databases | gzip > "${BACKUP_DIR}/mysql_${DATE}.sql.gz"
+          # job <name> <output file> <function>: the function writes the output file.
+          job() {
+            local name="$1" file="$2" fn="$3"
+            if "$fn" "$file" && [ -s "$file" ]; then
+              printf '%s %s\n' "$(date +%s)" "$(stat -c %s "$file")" > "${STATE_DIR}/${name}"
+              RUN_OK[$name]=1
+            else
+              echo "Backup job ${name} FAILED" >&2
+              rm -f "$file"
+              RUN_OK[$name]=0
+              FAILED=1
+            fi
+          }
 
-          # MongoDB Backup
-          docker exec mongodb mongodump --username admin --password {{ mongo_root_password }} --authenticationDatabase admin --out=/tmp/backup
-          docker cp mongodb:/tmp/backup "${BACKUP_DIR}/mongodb_${DATE}"
-          docker exec mongodb rm -rf /tmp/backup
-          tar -czf "${BACKUP_DIR}/mongodb_${DATE}.tar.gz" -C "${BACKUP_DIR}" "mongodb_${DATE}"
-          rm -rf "${BACKUP_DIR}/mongodb_${DATE}"
+          backup_postgres() {
+            docker exec postgres pg_dumpall -U postgres | gzip > "$1"
+          }
 
-          # Redis Backup
-          docker exec redis redis-cli -a {{ redis_password }} --rdb "${BACKUP_DIR}/redis_${DATE}.rdb" BGSAVE
-          sleep 5
-          docker cp redis:/data/dump.rdb "${BACKUP_DIR}/redis_${DATE}.rdb"
+          backup_mysql() {
+            docker exec mysql mysqldump -u root -p{{ mysql_root_password }} --all-databases | gzip > "$1"
+          }
+
+          backup_mongodb() {
+            local tmp="${BACKUP_DIR}/mongodb_${DATE}" rc
+            docker exec mongodb mongodump --username admin --password {{ mongo_root_password }} --authenticationDatabase admin --out=/tmp/backup \
+              && docker cp mongodb:/tmp/backup "$tmp" \
+              && tar -czf "$1" -C "${BACKUP_DIR}" "mongodb_${DATE}"
+            rc=$?
+            docker exec mongodb rm -rf /tmp/backup
+            rm -rf "$tmp"
+            return $rc
+          }
+
+          # BGSAVE returns at once; wait until Redis says the snapshot is finished, then copy it out.
+          backup_redis() {
+            local i
+            docker exec redis redis-cli -a {{ redis_password }} --no-auth-warning BGSAVE > /dev/null || return 1
+            for i in $(seq 1 30); do
+              sleep 2
+              docker exec redis redis-cli -a {{ redis_password }} --no-auth-warning INFO persistence | grep -q 'rdb_bgsave_in_progress:0' && break
+            done
+            docker exec redis redis-cli -a {{ redis_password }} --no-auth-warning INFO persistence | grep -q 'rdb_last_bgsave_status:ok' || return 1
+            docker cp redis:/data/dump.rdb "$1"
+          }
 
           # MinIO Backup (metadata and config)
-          tar -czf "${BACKUP_DIR}/minio_${DATE}.tar.gz" -C /opt/databases/minio/data .minio.sys
+          backup_minio() {
+            tar -czf "$1" -C /opt/databases/minio/data .minio.sys
+          }
 
-          # Keep only last 7 days of backups
-          find "${BACKUP_DIR}" -type f -mtime +7 -delete
+          job postgres "${BACKUP_DIR}/postgres_${DATE}.sql.gz" backup_postgres
+          job mysql    "${BACKUP_DIR}/mysql_${DATE}.sql.gz"    backup_mysql
+          job mongodb  "${BACKUP_DIR}/mongodb_${DATE}.tar.gz"  backup_mongodb
+          job redis    "${BACKUP_DIR}/redis_${DATE}.rdb"       backup_redis
+          job minio    "${BACKUP_DIR}/minio_${DATE}.tar.gz"    backup_minio
 
+          # Keep only last 7 days of backups (never the state files)
+          find "${BACKUP_DIR}" -type f -mtime +7 -not -path "${STATE_DIR}/*" -delete
+
+          # Publish the result for node-exporter (written aside and renamed, so a scrape never sees half a file).
+          TMP="${TEXTFILE_DIR}/.db_backup.prom.$$"
+          {
+            echo '# HELP backup_last_success_timestamp_seconds Unix time of the last backup job that produced a non-empty file.'
+            echo '# TYPE backup_last_success_timestamp_seconds gauge'
+            for name in $JOBS; do
+              if [ -f "${STATE_DIR}/${name}" ]; then
+                read -r ts size < "${STATE_DIR}/${name}"
+                echo "backup_last_success_timestamp_seconds{backup=\"${name}\"} ${ts}"
+              fi
+            done
+            echo '# HELP backup_last_size_bytes Size of the file written by the last successful run of each backup job.'
+            echo '# TYPE backup_last_size_bytes gauge'
+            for name in $JOBS; do
+              if [ -f "${STATE_DIR}/${name}" ]; then
+                read -r ts size < "${STATE_DIR}/${name}"
+                echo "backup_last_size_bytes{backup=\"${name}\"} ${size}"
+              fi
+            done
+            echo '# HELP backup_last_run_success 1 when the most recent run of the job succeeded, 0 when it failed.'
+            echo '# TYPE backup_last_run_success gauge'
+            for name in $JOBS; do
+              echo "backup_last_run_success{backup=\"${name}\"} ${RUN_OK[$name]:-0}"
+            done
+            echo '# HELP backup_last_run_timestamp_seconds Unix time the backup script last finished.'
+            echo '# TYPE backup_last_run_timestamp_seconds gauge'
+            echo "backup_last_run_timestamp_seconds $(date +%s)"
+          } > "${TMP}" && mv "${TMP}" "${TEXTFILE_DIR}/db_backup.prom"
+
+          if [ "${FAILED}" -ne 0 ]; then
+            echo "Backup finished WITH FAILURES: ${DATE}" >&2
+            exit 1
+          fi
           echo "Backup completed: ${DATE}"
 
     - name: Setup daily backup cron job

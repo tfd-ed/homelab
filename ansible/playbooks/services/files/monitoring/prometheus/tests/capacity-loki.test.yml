@@ -1,0 +1,37 @@
+# promtool unit tests for LokiIngestSurge in alerts/capacity.yml. A week of history at one-minute
+# resolution is more samples than promtool will load, so this file evaluates every 15 minutes.
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/capacity-loki.test.yml
+rule_files:
+  - ../alerts/capacity.yml
+
+evaluation_interval: 15m
+
+tests:
+  - name: log ingest three times its weekly average warns, and not before the surge
+    interval: 15m
+    input_series:
+      # About 100 KB/s (90 MB per 15 minutes) for seven days, then 400 KB/s for three hours.
+      - series: 'loki_distributor_bytes_received_total{job="loki"}'
+        values: '0+90000000x672 60480000000+360000000x12'
+    alert_rule_test:
+      - eval_time: 6d
+        alertname: LokiIngestSurge
+        exp_alerts: []
+      - eval_time: 7d3h
+        alertname: LokiIngestSurge
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Loki receives three times its usual log volume"
+              description: "Log ingest over the last hour is more than three times the 7-day average and above 50 KB/s. A pod in a crash loop or a debug level left on is the usual cause: see the Requests dashboard and the biggest streams in Grafana Explore."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+  - name: a steady rate never warns
+    interval: 15m
+    input_series:
+      - series: 'loki_distributor_bytes_received_total{job="loki"}'
+        values: '0+90000000x700'
+    alert_rule_test:
+      - eval_time: 7d3h
+        alertname: LokiIngestSurge
+        exp_alerts: []

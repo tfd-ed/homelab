@@ -1,0 +1,191 @@
+# promtool unit tests for alerts/capacity.yml. Run from the prometheus directory:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/capacity.test.yml
+rule_files:
+  - ../alerts/capacity.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: wear at 72 percent warns after an hour, not critical
+    interval: 1m
+    input_series:
+      - series: 'smart_nvme_percentage_used{device="nvme0", instance="pve:9100"}'
+        values: '72x100'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: NvmeWearHigh
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: NvmeWearHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, device: nvme0, instance: "pve:9100"}
+            exp_annotations:
+              summary: "The NVMe has used 72% of its rated life"
+              description: "nvme0 on pve:9100 reports Percentage Used 72. At 100 the drive is past its rated endurance. Plan a replacement and check where the writes come from (Loki, Tempo, Prometheus, databases, logs)."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+      - eval_time: 70m
+        alertname: NvmeWearCritical
+        exp_alerts: []
+
+  - name: wear at 91 percent is critical
+    interval: 1m
+    input_series:
+      - series: 'smart_nvme_percentage_used{device="nvme0", instance="pve:9100"}'
+        values: '91x100'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: NvmeWearCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, device: nvme0, instance: "pve:9100"}
+            exp_annotations:
+              summary: "The NVMe has used 91% of its rated life: replace it"
+              description: "nvme0 on pve:9100 reports Percentage Used 91. Everything runs on this one drive. Have a verified off-machine backup and a replacement ready."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+  - name: a healthy drive is quiet
+    interval: 1m
+    input_series:
+      - series: 'smart_nvme_percentage_used{device="nvme0", instance="pve:9100"}'
+        values: '3x200'
+      - series: 'smart_nvme_critical_warning{device="nvme0", instance="pve:9100"}'
+        values: '0x200'
+      - series: 'smart_nvme_available_spare_percent{device="nvme0", instance="pve:9100"}'
+        values: '100x200'
+      - series: 'smart_nvme_media_errors{device="nvme0", instance="pve:9100"}'
+        values: '0x200'
+      - series: 'smart_nvme_unsafe_shutdowns{device="nvme0", instance="pve:9100"}'
+        values: '12x200'
+      - series: 'smart_nvme_temperature_celsius{device="nvme0", instance="pve:9100"}'
+        values: '44x200'
+      - series: 'smart_nvme_scrape_timestamp_seconds{device="nvme0", instance="pve:9100"}'
+        values: '0+60x200'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: NvmeWearHigh
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: NvmeCriticalWarning
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: NvmeSpareLow
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: NvmeMediaErrors
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: NvmeUnsafeShutdown
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: NvmeTemperatureHigh
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: NvmeSmartMetricsStale
+        exp_alerts: []
+
+  - name: an unsafe shutdown (a power cut) warns when the counter moves
+    interval: 1m
+    input_series:
+      - series: 'smart_nvme_unsafe_shutdowns{device="nvme0", instance="pve:9100"}'
+        values: '12 12 12 12 13 13 13 13 13 13'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NvmeUnsafeShutdown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: NvmeUnsafeShutdown
+        exp_alerts:
+          - exp_labels: {severity: warning, device: nvme0, instance: "pve:9100"}
+            exp_annotations:
+              summary: "The host lost power without a clean shutdown"
+              description: "nvme0 on pve:9100 counted an unsafe shutdown in the last hour. After a power cut check the databases and the K3s cluster, and consider a UPS (observability plan, open decision 9)."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+  - name: a critical warning flag pages, and low spare warns
+    interval: 1m
+    input_series:
+      - series: 'smart_nvme_critical_warning{device="nvme0", instance="pve:9100"}'
+        values: '0 0 0 4x20'
+      - series: 'smart_nvme_available_spare_percent{device="nvme0", instance="pve:9100"}'
+        values: '15x100'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NvmeCriticalWarning
+        exp_alerts:
+          - exp_labels: {severity: critical, device: nvme0, instance: "pve:9100"}
+            exp_annotations:
+              summary: "The NVMe reports a critical warning"
+              description: "nvme0 on pve:9100 has a non-zero critical warning flag (4): spare capacity low, temperature, reliability degraded or read-only mode. Run smartctl -a on the host now."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+      - eval_time: 70m
+        alertname: NvmeSpareLow
+        exp_alerts:
+          - exp_labels: {severity: warning, device: nvme0, instance: "pve:9100"}
+            exp_annotations:
+              summary: "The NVMe spare capacity is down to 15%"
+              description: "nvme0 on pve:9100 has 15% of its spare blocks left. When it reaches the drive's threshold the drive is failing."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+  - name: stale SMART metrics warn once they are three hours old
+    interval: 1m
+    input_series:
+      # The timer wrote a timestamp of 0 and then stopped: the series stays at 0 while time moves on.
+      - series: 'smart_nvme_scrape_timestamp_seconds{device="nvme0", instance="pve:9100"}'
+        values: '0x400'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: NvmeSmartMetricsStale
+        exp_alerts: []
+      - eval_time: 3h20m
+        alertname: NvmeSmartMetricsStale
+        exp_alerts:
+          - exp_labels: {severity: warning, device: nvme0, instance: "pve:9100"}
+            exp_annotations:
+              summary: "The NVMe SMART figures are more than 3 hours old"
+              description: "The timer on pve:9100 that writes the SMART metrics has not succeeded for 3 hours. Check systemctl status nvme-smart-metrics.service and its journal on the host."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+  - name: thin pool at 85 percent warns, at 95 percent pages
+    interval: 1m
+    input_series:
+      - series: 'lvm_thin_pool_data_percent{vg="pve", lv="data", instance="pve:9100"}'
+        values: '85x20 95x60'
+      - series: 'lvm_thin_pool_metadata_percent{vg="pve", lv="data", instance="pve:9100"}'
+        values: '5x80'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ThinPoolFilling
+        exp_alerts:
+          - exp_labels: {severity: warning, vg: pve, lv: data, instance: "pve:9100"}
+            exp_annotations:
+              summary: "The LVM thin pool data is 95% full"
+              description: "Thin pool pve/data on pve:9100 is over 80% (data or metadata). VM disks are allocated on demand, so this is the real space left. Free space, or stop adding VM disk."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+      - eval_time: 15m
+        alertname: ThinPoolAlmostFull
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: ThinPoolAlmostFull
+        exp_alerts:
+          - exp_labels: {severity: critical, vg: pve, lv: data, instance: "pve:9100"}
+            exp_annotations:
+              summary: "The LVM thin pool data is 95% full"
+              description: "Thin pool pve/data on pve:9100 is over 90%. At 100% every VM on it freezes. Free space now."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+  - name: Prometheus near its 40 GB cap warns
+    interval: 1m
+    input_series:
+      - series: 'prometheus_tsdb_storage_blocks_bytes{job="prometheus"}'
+        values: '30000000000x30 38000000000x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PrometheusStorageNearCap
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: PrometheusStorageNearCap
+        exp_alerts:
+          - exp_labels: {severity: warning, job: prometheus}
+            exp_annotations:
+              summary: "Prometheus storage is at 88.48% of its 40 GB cap"
+              description: "Prometheus is close to --storage.tsdb.retention.size, so it will start deleting data before the 30-day retention. Check which jobs grew (prometheus_tsdb_head_series by job) or raise the cap and the VM disk."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"

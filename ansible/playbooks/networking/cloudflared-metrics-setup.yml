@@ -1,0 +1,87 @@
+---
+# ============================================================
+# Publish cloudflared's own metrics on the gateway VM (observability plan, Phase 5.1.6)
+# ============================================================
+# cloudflared keeps its Prometheus metrics on a loopback port by default. This playbook sets
+# TUNNEL_METRICS through a systemd drop-in so they are served on the VM's LAN address (port 20241),
+# where Prometheus scrapes them as job cloudflared (monitoring-setup.yml). The alerts are in
+# prometheus/alerts/tunnel.yml: TunnelDegraded (fewer than 2 connections to Cloudflare's edge) and
+# TunnelRequestErrors (over 5 % of requests failing between the tunnel and the origin).
+#
+# The drop-in is the same whether the tunnel runs from a token (`cloudflared service install <token>`)
+# or from /etc/cloudflared/config.yml: neither sets --metrics, so the environment variable applies.
+#
+# WARNING: restarting cloudflared drops the tunnel for a few seconds, and every public site goes
+# with it. Run this at a quiet time. The playbook restarts it only when the drop-in changed.
+#
+# Safe to re-run. If cloudflared does not run as a systemd unit named `cloudflared` (a Docker
+# container, for example), the playbook stops and says so: set the same variable there.
+#
+# Usage:
+#   cd ansible
+#   ansible-playbook playbooks/networking/cloudflared-metrics-setup.yml
+# Then re-run playbooks/services/monitoring-setup.yml so Prometheus scrapes it.
+# Runbook: docs/monitoring-phase5.md, "Tunnel metrics".
+# ============================================================
+- name: Publish cloudflared metrics on the gateway VM
+  hosts: gateway
+  become: true
+  gather_facts: true
+
+  vars:
+    metrics_port: 20241
+    dropin_dir: /etc/systemd/system/cloudflared.service.d
+
+  tasks:
+    - name: Find the cloudflared systemd unit
+      command: systemctl cat cloudflared.service
+      register: unit
+      changed_when: false
+      failed_when: false
+
+    - name: Stop if cloudflared is not a systemd unit here
+      fail:
+        msg: >-
+          There is no systemd unit named cloudflared on {{ inventory_hostname }}. If it runs in Docker,
+          add the environment variable TUNNEL_METRICS={{ ansible_host }}:{{ metrics_port }} (or the flag
+          --metrics {{ ansible_host }}:{{ metrics_port }}) to that container and publish the port.
+      when: unit.rc != 0
+
+    - name: Create the drop-in directory
+      file:
+        path: "{{ dropin_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Serve the metrics on the LAN address
+      copy:
+        dest: "{{ dropin_dir }}/metrics.conf"
+        mode: "0644"
+        content: |
+          # Managed by Ansible (playbooks/networking/cloudflared-metrics-setup.yml).
+          [Service]
+          Environment=TUNNEL_METRICS={{ ansible_host }}:{{ metrics_port }}
+      register: dropin
+
+    - name: Reload systemd and restart cloudflared (only when the drop-in changed)
+      systemd:
+        name: cloudflared
+        daemon_reload: true
+        state: restarted
+      when: dropin.changed
+
+    - name: Check that the metrics are served, with their tunnel connections
+      uri:
+        url: "http://{{ ansible_host }}:{{ metrics_port }}/metrics"
+        return_content: true
+      register: metrics
+      until: "'cloudflared_tunnel_ha_connections' in metrics.content"
+      retries: 12
+      delay: 5
+
+    - name: Summary
+      debug:
+        msg:
+          - "cloudflared metrics: http://{{ ansible_host }}:{{ metrics_port }}/metrics"
+          - "{{ (metrics.content | regex_findall('cloudflared_tunnel_ha_connections [0-9.]+')) | default(['no connection figure']) }}"
+          - "Next: re-run playbooks/services/monitoring-setup.yml so Prometheus scrapes it (job cloudflared) and loads alerts/tunnel.yml."

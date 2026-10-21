@@ -94,6 +94,30 @@ scrape_configs:
         labels:
           instance: 'database-vm'
 
+  # Host metrics of the database VM, plus the backup metrics its backup script publishes through
+  # node-exporter's textfile collector (alerts/backup.yml).
+  - job_name: 'node-exporter-database'
+    static_configs:
+      - targets: ['{{ node_exporter_database_target }}']
+        labels:
+          instance: 'database-vm'
+
+  # The Proxmox host: its own CPU, memory and disk, plus NVMe wear and LVM thin-pool use written by
+  # playbooks/infrastructure/proxmox-exporter-setup.yml (alerts/capacity.yml).
+  - job_name: 'node-exporter-proxmox'
+    static_configs:
+      - targets: ['{{ node_exporter_proxmox_target }}']
+        labels:
+          instance: 'proxmox-host'
+
+  # cloudflared on the gateway VM (playbooks/networking/cloudflared-metrics-setup.yml): connections to
+  # Cloudflare's edge and request errors (alerts/tunnel.yml).
+  - job_name: 'cloudflared'
+    static_configs:
+      - targets: ['{{ cloudflared_target }}']
+        labels:
+          instance: 'app-gateway'
+
 {% if minio_metrics_token | length > 0 %}
   # MinIO's own cluster metrics. The bearer token is read from a file (docs/monitoring-phase3.md).
   - job_name: 'minio'

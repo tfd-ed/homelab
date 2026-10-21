@@ -5,7 +5,15 @@
 # Adds two containers next to the existing postgres-exporter, on the same Docker network:
 #   mongodb-exporter  :9216   (a read-only "exporter" user is created in MongoDB for it)
 #   redis-exporter    :9121
+#   node-exporter     :9100   (Phase 5: host metrics of this VM and the backup metrics, see below)
 # Prometheus scrapes them (monitoring-setup.yml) and the datastore alerts use their series.
+#
+# node-exporter also publishes what /opt/databases/backup.sh writes into
+# /var/lib/node_exporter/textfile_collector (database-setup.yml): when each backup last succeeded and
+# how big it was. alerts/backup.yml pages when a backup is more than 26 hours old. It runs on the
+# bridge network with a published port, not on the host network, so the DOCKER-USER firewall of
+# playbooks/networking/database-firewall.yml filters it like the other exporters; for that reason
+# the network collectors are off (they would describe the container, not the VM).
 #
 # Variables, set in ansible/.env (see ansible/.env.example):
 #   MONGO_ROOT_PASSWORD      not needed here: the root password is read from the mongodb container itself
@@ -25,6 +33,7 @@
   vars:
     mongodb_exporter_version: "0.50.0"
     redis_exporter_version: "v1.82.0"
+    node_exporter_version: "v1.8.2"
     mongo_exporter_password: "{{ lookup('ansible.builtin.env', 'MONGO_EXPORTER_PASSWORD') }}"
     redis_password: "{{ lookup('ansible.builtin.env', 'REDIS_PASSWORD') }}"
 
@@ -102,7 +111,35 @@
           - name: db_network
       no_log: true
 
-    - name: Wait for both exporters and check that they reach their database
+    - name: Create the textfile directory the backup script writes to
+      file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        mode: "0755"
+
+    - name: Deploy node-exporter with the textfile collector
+      community.docker.docker_container:
+        name: node-exporter
+        image: "prom/node-exporter:{{ node_exporter_version }}"
+        state: started
+        restart: true
+        restart_policy: unless-stopped
+        pid_mode: host
+        ports:
+          - "9100:9100"
+        volumes:
+          - "/:/host:ro,rslave"
+          - "/var/lib/node_exporter/textfile_collector:/textfile:ro"
+        command:
+          - --path.rootfs=/host
+          - --collector.textfile.directory=/textfile
+          - --no-collector.netdev
+          - --no-collector.netclass
+          - --no-collector.netstat
+          - --no-collector.sockstat
+          - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)
+
+    - name: Wait for the exporters and check that they reach their database
       uri:
         url: "http://127.0.0.1:{{ item.port }}/metrics"
         return_content: yes
@@ -113,6 +150,7 @@
       loop:
         - { port: 9216, up: "mongodb_up{cluster_role=\"mongod\"} 1" }
         - { port: 9121, up: "redis_up 1" }
+        - { port: 9100, up: "node_textfile_scrape_error 0" }
       loop_control:
         label: "port {{ item.port }}"
 
@@ -121,4 +159,5 @@
         msg:
           - "mongodb-exporter: http://{{ ansible_host }}:9216/metrics (MongoDB user 'exporter', roles clusterMonitor + read on local)"
           - "redis-exporter:   http://{{ ansible_host }}:9121/metrics"
+          - "node-exporter:    http://{{ ansible_host }}:9100/metrics (host metrics and backup metrics; if the firewall is enforcing, port 9100 must be in db_firewall_exporter_ports)"
           - "Next: re-run playbooks/services/monitoring-setup.yml so Prometheus scrapes them (already in its config), then check /targets."

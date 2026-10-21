@@ -1,0 +1,59 @@
+# Backup alerts (observability plan, Phase 5.1.3).
+#
+# The series come from the database VM's backup script (playbooks/services/database-setup.yml,
+# /opt/databases/backup.sh, run by cron at 02:00), which writes them to node-exporter's textfile
+# collector. `backup` is the job (postgres, mysql, mongodb, redis, minio). A backup counts as a
+# success only when the command succeeded and the file is not empty.
+#
+# Deployed verbatim by playbooks/services/monitoring-setup.yml (`copy`). Validate with:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 check rules /w/backup.yml
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/backup.test.yml
+
+groups:
+  - name: backup
+    rules:
+      # The one that matters: the newest good copy is older than a day plus a margin for a slow run.
+      - alert: BackupStale
+        expr: time() - backup_last_success_timestamp_seconds > 26 * 3600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No good {{ $labels.backup }} backup for over 26 hours"
+          description: "The last successful {{ $labels.backup }} backup on {{ $labels.instance }} is older than 26 hours (the job runs daily at 02:00). Read /var/log/db-backup.log on the database VM and run /opt/databases/backup.sh by hand. Backups are on the same VM, so they do not survive losing it (observability plan, open decision 10)."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+
+      - alert: BackupLastRunFailed
+        expr: backup_last_run_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The last {{ $labels.backup }} backup run failed"
+          description: "The {{ $labels.backup }} job failed in its most recent run on {{ $labels.instance }}. The previous good backup is kept. If this is still failing tomorrow, BackupStale pages. See /var/log/db-backup.log."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+
+      # A dump that "succeeded" but is far smaller than usual is usually an empty or half-finished one.
+      - alert: BackupTooSmall
+        expr: |
+          backup_last_size_bytes < 0.5 * avg_over_time(backup_last_size_bytes[7d])
+          and avg_over_time(backup_last_size_bytes[7d]) > 10240
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.backup }} backup is less than half its usual size"
+          description: "The last {{ $labels.backup }} backup file is under half the 7-day average. It may be incomplete. Open the file, and compare it with the one before in /opt/databases/backups."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+
+      # Nothing is published: the exporter is not running, the textfile directory is not mounted, or
+      # the script has never finished. The 30 hours leave room for the first nightly run after a deploy.
+      - alert: BackupMetricsMissing
+        expr: absent(backup_last_run_timestamp_seconds)
+        for: 30h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No backup metrics are being published"
+          description: "Prometheus has no backup_last_run_timestamp_seconds. Check that node-exporter on the database VM mounts /var/lib/node_exporter/textfile_collector (playbooks/services/database-exporters-setup.yml) and that /opt/databases/backup.sh runs (cron, 02:00)."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#backups"

@@ -1,0 +1,141 @@
+---
+# ============================================================
+# Host metrics and NVMe wear on the Proxmox host (observability plan, Phase 5.5.1)
+# ============================================================
+# Everything runs on one NVMe, so its health and the room left in the LVM thin pool are the biggest
+# single risk (plan section 4.3), and nothing measured them. This playbook adds, on the Proxmox host:
+#   - prometheus-node-exporter (:9100), the Debian package, with the textfile collector turned on;
+#   - /usr/local/bin/nvme-smart-metrics.py and a systemd timer (every 15 minutes) that writes
+#     smart_nvme_* (from smartctl) and lvm_thin_pool_* (from lvs) into that collector's directory.
+# Prometheus scrapes it as job node-exporter-proxmox (monitoring-setup.yml); the alerts are in
+# prometheus/alerts/capacity.yml. You also get the host's own CPU, memory and disk figures, which the
+# existing host alerts (HostMemoryHigh, HostDiskSpaceLow, ...) start covering.
+#
+# Safe to re-run. It installs packages and writes files; it does not touch VMs or storage.
+#
+# Usage:
+#   cd ansible
+#   ansible-playbook playbooks/infrastructure/proxmox-exporter-setup.yml
+#   ansible-playbook playbooks/infrastructure/proxmox-exporter-setup.yml -e '{"nvme_devices":["/dev/nvme0","/dev/nvme1"]}'
+# Then re-run playbooks/services/monitoring-setup.yml so Prometheus scrapes it and loads capacity.yml.
+# Runbook: docs/monitoring-phase5.md, "SSD wear and capacity".
+# ============================================================
+- name: Install node-exporter and the NVMe/LVM metrics timer on the Proxmox host
+  hosts: proxmox
+  become: true
+  gather_facts: true
+
+  vars:
+    textfile_dir: /var/lib/node_exporter/textfile_collector
+    nvme_devices:
+      - /dev/nvme0
+    metrics_interval: 15min
+
+  tasks:
+    - name: Install node-exporter, smartmontools and python3
+      apt:
+        name:
+          - prometheus-node-exporter
+          - smartmontools
+          - python3
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the textfile collector directory
+      file:
+        path: "{{ textfile_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Turn on the textfile collector
+      lineinfile:
+        path: /etc/default/prometheus-node-exporter
+        regexp: '^ARGS='
+        line: 'ARGS="--collector.textfile.directory={{ textfile_dir }}"'
+        create: true
+        mode: "0644"
+      notify: Restart node-exporter
+
+    - name: Install the NVMe and LVM metrics script
+      copy:
+        src: "{{ playbook_dir }}/files/nvme-smart-metrics.py"
+        dest: /usr/local/bin/nvme-smart-metrics.py
+        mode: "0755"
+
+    - name: Install the systemd service that runs it once
+      copy:
+        dest: /etc/systemd/system/nvme-smart-metrics.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Write NVMe SMART and LVM thin-pool metrics for node-exporter
+
+          [Service]
+          Type=oneshot
+          Environment=NVME_DEVICES={{ nvme_devices | join(' ') }}
+          Environment=TEXTFILE={{ textfile_dir }}/nvme_smart.prom
+          ExecStart=/usr/local/bin/nvme-smart-metrics.py
+      notify: Reload systemd
+
+    - name: Install the timer
+      copy:
+        dest: /etc/systemd/system/nvme-smart-metrics.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run nvme-smart-metrics every {{ metrics_interval }}
+
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec={{ metrics_interval }}
+          AccuracySec=1min
+
+          [Install]
+          WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Reload systemd now, so the units below exist
+      meta: flush_handlers
+
+    - name: Enable node-exporter and the timer
+      systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - prometheus-node-exporter
+        - nvme-smart-metrics.timer
+
+    - name: Write the metrics once now
+      systemd:
+        name: nvme-smart-metrics.service
+        state: started
+      register: first_run
+
+    - name: Check that node-exporter serves the NVMe figures
+      uri:
+        url: "http://127.0.0.1:9100/metrics"
+        return_content: true
+      register: metrics
+      until: "'smart_nvme_scrape_success{device=\"' in metrics.content"
+      retries: 6
+      delay: 5
+
+    - name: Summary
+      debug:
+        msg:
+          - "node-exporter: http://{{ ansible_host }}:9100/metrics (textfile collector on {{ textfile_dir }})"
+          - "NVMe devices read: {{ nvme_devices | join(', ') }}, every {{ metrics_interval }}"
+          - "{{ (metrics.content | regex_findall('smart_nvme_percentage_used\\{[^}]*\\} [0-9.]+')) | default(['no wear figure yet: check smartctl -a on the host']) }}"
+          - "Next: re-run playbooks/services/monitoring-setup.yml so Prometheus scrapes it (job node-exporter-proxmox) and loads alerts/capacity.yml."
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+
+    - name: Restart node-exporter
+      service:
+        name: prometheus-node-exporter
+        state: restarted

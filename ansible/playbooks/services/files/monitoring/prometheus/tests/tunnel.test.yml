@@ -1,0 +1,61 @@
+# promtool unit tests for alerts/tunnel.yml. Run from the prometheus directory:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/tunnel.test.yml
+rule_files:
+  - ../alerts/tunnel.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: four connections is healthy, one pages after five minutes
+    interval: 1m
+    input_series:
+      - series: 'cloudflared_tunnel_ha_connections{job="cloudflared", instance="gw:20241"}'
+        values: '4 4 4 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TunnelDegraded
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: TunnelDegraded
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: TunnelDegraded
+        exp_alerts:
+          - exp_labels: {severity: critical, job: cloudflared, instance: "gw:20241"}
+            exp_annotations:
+              summary: "The Cloudflare tunnel has 1 connection(s) to the edge (normally 4)"
+              description: "cloudflared on gw:20241 has fewer than 2 high-availability connections to Cloudflare for 5 minutes. Traffic may still flow on the rest, but one more failure is an outage. Check the gateway VM's internet access and systemctl status cloudflared."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#tunnel-metrics"
+
+  - name: two connections is not degraded
+    interval: 1m
+    input_series:
+      - series: 'cloudflared_tunnel_ha_connections{job="cloudflared", instance="gw:20241"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TunnelDegraded
+        exp_alerts: []
+
+  - name: a high error share with real traffic warns, the same share with no traffic does not
+    interval: 1m
+    input_series:
+      # 1 request/s, 10 % of them failing.
+      - series: 'cloudflared_tunnel_total_requests{job="cloudflared", instance="gw:20241"}'
+        values: '0+60x60'
+      - series: 'cloudflared_tunnel_request_errors{job="cloudflared", instance="gw:20241"}'
+        values: '0+6x60'
+      # A second tunnel with a tiny rate and the same error share.
+      - series: 'cloudflared_tunnel_total_requests{job="cloudflared", instance="quiet:20241"}'
+        values: '0+1x60'
+      - series: 'cloudflared_tunnel_request_errors{job="cloudflared", instance="quiet:20241"}'
+        values: '0+0.5x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TunnelRequestErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "gw:20241"}
+            exp_annotations:
+              summary: "Over 5% of requests fail between the tunnel and the origin"
+              description: "cloudflared on gw:20241 counts more than 5% request errors for 10 minutes: Nginx Proxy Manager or an upstream refuses or drops connections. Check the gateway VM and the ingress NodePort."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#tunnel-metrics"

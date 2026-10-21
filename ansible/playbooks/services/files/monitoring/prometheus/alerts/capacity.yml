@@ -1,0 +1,158 @@
+# Capacity and SSD wear alerts (observability plan, Phase 5.5.1).
+#
+# Everything here lives on one NVMe, so its health and the room left on it are the biggest single
+# risk (plan section 4.3). Two sources:
+#   - the Proxmox host: playbooks/infrastructure/proxmox-exporter-setup.yml runs node-exporter there and
+#     a 15-minute timer that writes smart_nvme_* (smartctl) and lvm_thin_pool_* (lvs) to its textfile
+#     collector (job node-exporter-proxmox);
+#   - the monitoring stack's own metrics (Prometheus and Loki), for the 80 GB monitoring VM.
+# Host and VM disk space already has alerts in baseline.yml (HostDiskSpaceLow, HostDiskWillFillIn24h).
+#
+# Deployed verbatim by playbooks/services/monitoring-setup.yml (`copy`). Validate with:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 check rules /w/alerts/capacity.yml
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/capacity.test.yml
+
+groups:
+  - name: ssd-wear
+    rules:
+      - alert: NvmeWearHigh
+        expr: smart_nvme_percentage_used >= 70
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The NVMe has used {{ $value }}% of its rated life"
+          description: "{{ $labels.device }} on {{ $labels.instance }} reports Percentage Used {{ $value }}. At 100 the drive is past its rated endurance. Plan a replacement and check where the writes come from (Loki, Tempo, Prometheus, databases, logs)."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      - alert: NvmeWearCritical
+        expr: smart_nvme_percentage_used >= 90
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "The NVMe has used {{ $value }}% of its rated life: replace it"
+          description: "{{ $labels.device }} on {{ $labels.instance }} reports Percentage Used {{ $value }}. Everything runs on this one drive. Have a verified off-machine backup and a replacement ready."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      - alert: NvmeCriticalWarning
+        expr: smart_nvme_critical_warning > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The NVMe reports a critical warning"
+          description: "{{ $labels.device }} on {{ $labels.instance }} has a non-zero critical warning flag ({{ $value }}): spare capacity low, temperature, reliability degraded or read-only mode. Run smartctl -a on the host now."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      - alert: NvmeSpareLow
+        expr: smart_nvme_available_spare_percent < 20
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The NVMe spare capacity is down to {{ $value }}%"
+          description: "{{ $labels.device }} on {{ $labels.instance }} has {{ $value }}% of its spare blocks left. When it reaches the drive's threshold the drive is failing."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      - alert: NvmeMediaErrors
+        expr: increase(smart_nvme_media_errors[1d]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The NVMe reported new media errors"
+          description: "{{ $labels.device }} on {{ $labels.instance }} counted new media and data integrity errors in the last day. Check smartctl -a and the backups."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      # Each one is an unclean power loss: the early warning that the UPS (open decision 9) is missing.
+      - alert: NvmeUnsafeShutdown
+        expr: increase(smart_nvme_unsafe_shutdowns[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The host lost power without a clean shutdown"
+          description: "{{ $labels.device }} on {{ $labels.instance }} counted an unsafe shutdown in the last hour. After a power cut check the databases and the K3s cluster, and consider a UPS (observability plan, open decision 9)."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      - alert: NvmeTemperatureHigh
+        expr: smart_nvme_temperature_celsius > 70
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The NVMe is at {{ $value }} °C"
+          description: "{{ $labels.device }} on {{ $labels.instance }} has been over 70 °C for 15 minutes. Check airflow and the host fans."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      # The timer that writes these figures stopped, so the alerts above would go quiet.
+      - alert: NvmeSmartMetricsStale
+        expr: time() - smart_nvme_scrape_timestamp_seconds > 3 * 3600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The NVMe SMART figures are more than 3 hours old"
+          description: "The timer on {{ $labels.instance }} that writes the SMART metrics has not succeeded for 3 hours. Check systemctl status nvme-smart-metrics.service and its journal on the host."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+  - name: capacity
+    rules:
+      # VM disks are thin-provisioned: the thin pool can run out of real space while every VM still
+      # sees free space. At 100 % data or metadata the VMs freeze.
+      - alert: ThinPoolFilling
+        expr: lvm_thin_pool_data_percent > 80 or lvm_thin_pool_metadata_percent > 80
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The LVM thin pool {{ $labels.lv }} is {{ $value | printf \"%.0f\" }}% full"
+          description: "Thin pool {{ $labels.vg }}/{{ $labels.lv }} on {{ $labels.instance }} is over 80% (data or metadata). VM disks are allocated on demand, so this is the real space left. Free space, or stop adding VM disk."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      - alert: ThinPoolAlmostFull
+        expr: lvm_thin_pool_data_percent > 90 or lvm_thin_pool_metadata_percent > 90
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The LVM thin pool {{ $labels.lv }} is {{ $value | printf \"%.0f\" }}% full"
+          description: "Thin pool {{ $labels.vg }}/{{ $labels.lv }} on {{ $labels.instance }} is over 90%. At 100% every VM on it freezes. Free space now."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      # Prometheus is told to keep at most 40 GB (prometheus_retention_size); near it, old data is
+      # dropped early and the history on the dashboards shortens.
+      - alert: PrometheusStorageNearCap
+        expr: prometheus_tsdb_storage_blocks_bytes / (40 * 1024 * 1024 * 1024) > 0.85
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus storage is at {{ $value | humanizePercentage }} of its 40 GB cap"
+          description: "Prometheus is close to --storage.tsdb.retention.size, so it will start deleting data before the 30-day retention. Check which jobs grew (prometheus_tsdb_head_series by job) or raise the cap and the VM disk."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      # A label that accidentally carries a URL or an id multiplies series. Growth over a week, with a
+      # floor so a small system's first deploys do not count.
+      - alert: PrometheusSeriesGrowing
+        expr: |
+          prometheus_tsdb_head_series > 1.5 * (prometheus_tsdb_head_series offset 7d)
+          and prometheus_tsdb_head_series > 20000
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus has {{ $value | printf \"%.0f\" }} active series, 50% more than a week ago"
+          description: "The number of active series grew by half in a week. Look for a new label with many values (topk(10, count by (__name__) ({__name__=~\".+\"}))) and fix it at the source."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
+
+      - alert: LokiIngestSurge
+        expr: |
+          sum(rate(loki_distributor_bytes_received_total[1h])) > 3 * sum(rate(loki_distributor_bytes_received_total[7d]))
+          and sum(rate(loki_distributor_bytes_received_total[1h])) > 51200
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loki receives three times its usual log volume"
+          description: "Log ingest over the last hour is more than three times the 7-day average and above 50 KB/s. A pod in a crash loop or a debug level left on is the usual cause: see the Requests dashboard and the biggest streams in Grafana Explore."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#ssd-wear-and-capacity"
