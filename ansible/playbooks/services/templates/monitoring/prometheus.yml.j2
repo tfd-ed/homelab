@@ -110,6 +110,14 @@ scrape_configs:
         labels:
           instance: 'proxmox-host'
 
+  # The ci-cd VM: its own host metrics, plus the synthetic journey results the runner publishes
+  # through node-exporter's textfile collector (synthetic-setup.yml, alerts/synthetic.yml).
+  - job_name: 'node-exporter-ci'
+    static_configs:
+      - targets: ['{{ node_exporter_ci_target }}']
+        labels:
+          instance: 'ci-cd'
+
   # cloudflared on the gateway VM (playbooks/networking/cloudflared-metrics-setup.yml): connections to
   # Cloudflare's edge and request errors (alerts/tunnel.yml).
   - job_name: 'cloudflared'

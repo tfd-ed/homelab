@@ -1,0 +1,88 @@
+# promtool unit tests for alerts/synthetic.yml. Run from the prometheus directory:
+#   docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/synthetic.test.yml
+rule_files:
+  - ../alerts/synthetic.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: one failed run is silent, two warn, four on production are critical
+    interval: 10m
+    input_series:
+      - series: 'synthetic_consecutive_failures{journey="home", env="prod", instance="ci:9100", job="node-exporter-ci"}'
+        values: '0 1 2 3 4 0'
+      - series: 'synthetic_last_run_timestamp_seconds{instance="ci:9100", job="node-exporter-ci"}'
+        values: '0 600 1200 1800 2400 3000'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SyntheticJourneyFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SyntheticJourneyFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, journey: home, env: prod, instance: "ci:9100", job: node-exporter-ci}
+            exp_annotations:
+              summary: "The home journey is failing on prod"
+              description: "The home journey has failed 2 runs in a row on prod (a run is every 10 minutes). A screenshot of each failure is on the ci-cd VM in /opt/synthetic/artifacts, and `journalctl -u synthetic` there says which step failed."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#synthetic-journeys"
+      - eval_time: 30m
+        alertname: SyntheticProdJourneyDown
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: SyntheticProdJourneyDown
+        exp_alerts:
+          - exp_labels: {severity: critical, journey: home, env: prod, instance: "ci:9100", job: node-exporter-ci}
+            exp_annotations:
+              summary: "The home journey has been failing on production for 4 runs"
+              description: "A public page or check on production has failed 40 minutes of runs in a row. If HttpProbeFailed is not firing the site is up, so this is a page that is broken (a bad deploy, an API the page needs, a missing course): open it, then the Deployments page."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#synthetic-journeys"
+      - eval_time: 50m
+        alertname: SyntheticJourneyFailing
+        exp_alerts: []
+
+  - name: a dev journey never goes critical
+    interval: 10m
+    input_series:
+      - series: 'synthetic_consecutive_failures{journey="login", env="dev", instance="ci:9100", job="node-exporter-ci"}'
+        values: '5 6 7 8 9 10'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: SyntheticProdJourneyDown
+        exp_alerts: []
+
+  - name: a runner that died leaves an old timestamp behind and is noticed
+    interval: 1m
+    input_series:
+      # node-exporter keeps serving the last file: the timestamp never moves
+      - series: 'synthetic_last_run_timestamp_seconds{instance="ci:9100", job="node-exporter-ci"}'
+        values: '1000x90'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SyntheticRunsStale
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: SyntheticRunsStale
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "ci:9100", job: node-exporter-ci}
+            exp_annotations:
+              summary: "The synthetic journeys have not run for 53m 20s"
+              description: "The runner on the ci-cd VM should finish every 10 minutes. Check `systemctl status synthetic.timer synthetic.service` and `docker ps` there, and that node-exporter on port 9100 is up."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#synthetic-journeys"
+
+  - name: no results at all is reported once the runner has been absent for a while
+    interval: 1m
+    input_series:
+      - series: 'up{job="node-exporter-ci", instance="ci:9100"}'
+        values: '1x90'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SyntheticMetricsMissing
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: SyntheticMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "No synthetic journey results are reaching Prometheus"
+              description: "Nothing has been published for an hour: the runner is not installed (run playbooks/services/synthetic-setup.yml), or node-exporter on the ci-cd VM is not scraped (job node-exporter-ci)."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#synthetic-journeys"

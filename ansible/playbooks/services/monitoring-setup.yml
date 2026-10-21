@@ -83,6 +83,8 @@
     redis_exporter_target: "192.168.100.205:9121"
     # node-exporter on the database VM: host metrics and the backup metrics (database-exporters-setup.yml).
     node_exporter_database_target: "192.168.100.205:9100"
+    # node-exporter on the ci-cd VM: host metrics and the synthetic journey results (synthetic-setup.yml).
+    node_exporter_ci_target: "192.168.100.240:9100"
     # Proxmox host (proxmox-exporter-setup.yml) and cloudflared on the gateway VM (cloudflared-metrics-setup.yml).
     node_exporter_proxmox_target: "192.168.100.50:9100"
     cloudflared_target: "192.168.100.210:20241"

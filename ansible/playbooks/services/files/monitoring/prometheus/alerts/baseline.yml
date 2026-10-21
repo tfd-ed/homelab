@@ -29,13 +29,13 @@ groups:
           description: "Always firing by design. Routed to the external heartbeat only."
 
       - alert: ScrapeTargetDown
-        expr: up{job=~"alertmanager|blackbox-exporter|loki|alloy-k8s|alloy-gateway|node-exporter-monitoring|k8s-nodes|kube-state-metrics|postgres|tempo|mongodb|redis|node-exporter-database|node-exporter-proxmox|cloudflared"} == 0
+        expr: up{job=~"alertmanager|blackbox-exporter|loki|alloy-k8s|alloy-gateway|node-exporter-monitoring|k8s-nodes|kube-state-metrics|postgres|tempo|mongodb|redis|node-exporter-database|node-exporter-proxmox|node-exporter-ci|cloudflared"} == 0
         for: 3m
         labels:
           severity: critical
         annotations:
           summary: "Scrape target down: {{ $labels.job }} {{ $labels.instance }}"
-          description: "Prometheus cannot scrape {{ $labels.instance }} (job {{ $labels.job }}) for 3 minutes. If this fires right after the first deploy for k8s-nodes, run playbooks/services/node-exporter-setup.yml; for kube-state-metrics, run playbooks/kubernetes/kube-state-metrics-setup.yml; for alloy-k8s run playbooks/kubernetes/alloy-setup.yml, for alloy-gateway run playbooks/networking/gateway-logging-setup.yml; for mongodb, redis and node-exporter-database run playbooks/services/database-exporters-setup.yml; for node-exporter-proxmox run playbooks/infrastructure/proxmox-exporter-setup.yml, for cloudflared run playbooks/networking/cloudflared-metrics-setup.yml; for tempo check `docker logs tempo` on the monitoring VM;"
+          description: "Prometheus cannot scrape {{ $labels.instance }} (job {{ $labels.job }}) for 3 minutes. If this fires right after the first deploy for k8s-nodes, run playbooks/services/node-exporter-setup.yml; for kube-state-metrics, run playbooks/kubernetes/kube-state-metrics-setup.yml; for alloy-k8s run playbooks/kubernetes/alloy-setup.yml, for alloy-gateway run playbooks/networking/gateway-logging-setup.yml; for mongodb, redis and node-exporter-database run playbooks/services/database-exporters-setup.yml; for node-exporter-proxmox run playbooks/infrastructure/proxmox-exporter-setup.yml, for node-exporter-ci run playbooks/services/synthetic-setup.yml, for cloudflared run playbooks/networking/cloudflared-metrics-setup.yml; for tempo check `docker logs tempo` on the monitoring VM;"
           runbook: "homelab-journey/docs/monitoring-phase0.md#scrapetargetdown"
 
       - alert: PrometheusRuleEvaluationFailing

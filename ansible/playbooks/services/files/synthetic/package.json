@@ -1,0 +1,12 @@
+{
+  "name": "tfd-synthetic",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic journeys for tfdevs.com (observability plan, Phase 5, 5.2.1). Run by synthetic-setup.yml on the ci-cd VM.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "playwright": "1.49.1"
+  }
+}

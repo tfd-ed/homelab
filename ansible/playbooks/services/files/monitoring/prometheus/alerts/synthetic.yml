@@ -1,0 +1,53 @@
+# Synthetic journeys (observability plan, Phase 5, slice C, item 5.2.1): a headless browser on the
+# ci-cd VM opens the public pages every 10 minutes (and the signed-in ones on dev), so a broken page
+# is found before a student reports it. The runner is services/files/synthetic, installed by
+# synthetic-setup.yml; it writes these metrics into node-exporter's textfile directory:
+#   synthetic_success{journey,env}                      1 if the last run passed
+#   synthetic_duration_seconds{journey,env}
+#   synthetic_consecutive_failures{journey,env}         runs in a row that failed
+#   synthetic_last_success_timestamp_seconds{journey,env}
+#   synthetic_last_run_timestamp_seconds                when the runner last finished
+# One failed run is never alerted: a page can fail once for a reason nobody needs to know. Two in a
+# row (20 minutes) is a warning; a production journey still failing after four (40 minutes) is critical.
+# Tested in ../tests/synthetic.test.yml.
+groups:
+  - name: synthetic
+    rules:
+      - alert: SyntheticJourneyFailing
+        expr: synthetic_consecutive_failures >= 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.journey }} journey is failing on {{ $labels.env }}"
+          description: "The {{ $labels.journey }} journey has failed {{ $value | humanize }} runs in a row on {{ $labels.env }} (a run is every 10 minutes). A screenshot of each failure is on the ci-cd VM in /opt/synthetic/artifacts, and `journalctl -u synthetic` there says which step failed."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#synthetic-journeys"
+
+      - alert: SyntheticProdJourneyDown
+        expr: synthetic_consecutive_failures{env="prod"} >= 4
+        labels:
+          severity: critical
+        annotations:
+          summary: "The {{ $labels.journey }} journey has been failing on production for {{ $value | humanize }} runs"
+          description: "A public page or check on production has failed 40 minutes of runs in a row. If HttpProbeFailed is not firing the site is up, so this is a page that is broken (a bad deploy, an API the page needs, a missing course): open it, then the Deployments page."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#synthetic-journeys"
+
+      # The runner itself stopped: no news is not good news.
+      - alert: SyntheticRunsStale
+        expr: time() - synthetic_last_run_timestamp_seconds > 2400
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The synthetic journeys have not run for {{ $value | humanizeDuration }}"
+          description: "The runner on the ci-cd VM should finish every 10 minutes. Check `systemctl status synthetic.timer synthetic.service` and `docker ps` there, and that node-exporter on port 9100 is up."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#synthetic-journeys"
+
+      - alert: SyntheticMetricsMissing
+        expr: absent_over_time(synthetic_last_run_timestamp_seconds[1h])
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No synthetic journey results are reaching Prometheus"
+          description: "Nothing has been published for an hour: the runner is not installed (run playbooks/services/synthetic-setup.yml), or node-exporter on the ci-cd VM is not scraped (job node-exporter-ci)."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#synthetic-journeys"

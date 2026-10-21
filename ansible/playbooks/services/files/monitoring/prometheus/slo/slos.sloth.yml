@@ -1,0 +1,99 @@
+# Service level objectives (observability plan, Phase 5, slice C, item 5.1.5).
+#
+# This file is the SOURCE. The Prometheus rules are generated from it by Sloth and committed as
+# plain YAML in ../alerts/slo.yml, so nothing new runs on the monitoring VM. Regenerate after any
+# edit, from this directory:
+#
+#   ./generate.sh
+#
+# Three SLIs, all prod, all measured the way a visitor would feel them:
+#   site-available  the public site answers the Blackbox probe (DNS, tunnel, gateway, ingress, app)
+#   api-available   the API does not answer 5xx on a route that exists (scanner hits on unknown
+#                   URLs and our synthetic journeys are left out)
+#   api-fast        the API answers in under 1 second
+#
+# Sloth turns each into recording rules (error ratio over 5m, 30m, 1h, 2h, 6h, 1d, 3d and the whole
+# 30 days) and four burn-rate alerts: page (severity critical) when the 30-day budget would be gone
+# in about 2 days (14.4x over 1h and 5m) or 5 days (6x over 6h and 30m); ticket (severity warning)
+# when it would be gone in 10 days (3x over 1d and 2h) or 30 days (1x over 3d and 6h).
+# A page only fires when the short AND the long window both burn, so one blip never pages.
+#
+# The targets are first guesses taken from the plan: tune them after a month of real numbers
+# (docs/monitoring-phase5.md, "SLOs"). The 30-day figure needs 30 days of data to be exact; until
+# then it is computed from what exists.
+version: "prometheus/v1"
+service: "tfd"
+labels:
+  env: prod
+slos:
+  - name: "site-available"
+    objective: 99.5
+    description: "The public site answers the Blackbox HTTP probe."
+    sli:
+      raw:
+        error_ratio_query: |
+          1 - avg(avg_over_time(probe_success{job="blackbox-http", probe="site", env="prod"}[{{.window}}]))
+    alerting:
+      name: SiteAvailabilitySloBurn
+      labels:
+        category: availability
+      annotations:
+        summary: "The site is burning its availability budget"
+        description: "The public site is failing its probe fast enough to use up the 30-day budget of 99.5 % availability early. Open the TFD Services dashboard and the Alerts page; HttpProbeFailed names the failing target."
+        runbook: "homelab-journey/docs/monitoring-phase5.md#slos"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
+
+  - name: "api-available"
+    objective: 99.5
+    description: "API requests to known routes do not end in a 5xx."
+    sli:
+      events:
+        error_query: |
+          sum(rate(http_server_duration_seconds_count{job="tfd-api", env="prod", route!="unmatched", traffic!="synthetic", status_class="5xx"}[{{.window}}]))
+        total_query: |
+          sum(rate(http_server_duration_seconds_count{job="tfd-api", env="prod", route!="unmatched", traffic!="synthetic"}[{{.window}}]))
+    alerting:
+      name: ApiAvailabilitySloBurn
+      labels:
+        category: availability
+      annotations:
+        summary: "The API is burning its availability budget"
+        description: "Too many API responses are 5xx for the 30-day budget of 99.5 % to hold. Look at the Requests page filtered to 5xx, then the error issues in GlitchTip, then the traces."
+        runbook: "homelab-journey/docs/monitoring-phase5.md#slos"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
+
+  - name: "api-fast"
+    objective: 95
+    description: "API requests to known routes are answered in under 1 second."
+    sli:
+      events:
+        error_query: |
+          sum(rate(http_server_duration_seconds_count{job="tfd-api", env="prod", route!="unmatched", traffic!="synthetic"}[{{.window}}]))
+          -
+          sum(rate(http_server_duration_seconds_bucket{job="tfd-api", env="prod", route!="unmatched", traffic!="synthetic", le="1"}[{{.window}}]))
+        total_query: |
+          sum(rate(http_server_duration_seconds_count{job="tfd-api", env="prod", route!="unmatched", traffic!="synthetic"}[{{.window}}]))
+    alerting:
+      name: ApiLatencySloBurn
+      labels:
+        category: latency
+      annotations:
+        summary: "The API is burning its latency budget"
+        description: "Too many API requests take over a second for the 30-day budget of 95 % under 1 s to hold. Check CPU throttling first (ContainerCpuThrottled), then the slowest routes on the Requests page; a slow request's exemplar opens its trace."
+        runbook: "homelab-journey/docs/monitoring-phase5.md#slos"
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning

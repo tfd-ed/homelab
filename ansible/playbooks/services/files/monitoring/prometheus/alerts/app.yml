@@ -9,17 +9,19 @@
 groups:
   - name: tfd-app-errors
     rules:
-      # More than 2 % of responses are 5xx, over 5 minutes, with enough traffic for that to mean
-      # something (the 0.05 req/s floor is about 15 requests in the window).
+      # Page renders: more than 2 % of SSR responses are 5xx, over 5 minutes, with enough traffic for
+      # that to mean something (the 0.05 req/s floor is about 15 requests in the window).
+      # The API's own 5xx and latency are NOT here any more: they are SLO burn-rate alerts
+      # (alerts/slo.yml, generated from slo/slos.sloth.yml) so one bad minute no longer pages.
       - alert: AppHighErrorRate
         expr: |
           (
-            sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job=~"tfd-api|tfd-blog", status_class="5xx"}[5m]))
+            sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-blog", status_class="5xx"}[5m]))
             /
-            sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job=~"tfd-api|tfd-blog"}[5m]))
+            sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-blog"}[5m]))
           ) > 0.02
           and
-          sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job=~"tfd-api|tfd-blog"}[5m])) > 0.05
+          sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-blog"}[5m])) > 0.05
         for: 5m
         labels:
           severity: critical
@@ -27,19 +29,6 @@ groups:
           summary: "{{ $labels.job }}: {{ $value | humanizePercentage }} of responses are 5xx"
           description: "Over 2 % of {{ $labels.job }} responses were 5xx for 5 minutes. Open the TFD Services dashboard, then the error issues in GlitchTip, then the traces (Explore, Tempo, status = error)."
           runbook: "homelab-journey/docs/monitoring-phase3.md#apphigherrorrate"
-
-      - alert: ApiLatencyHigh
-        expr: |
-          histogram_quantile(0.95, sum by (le, job, env) (rate(http_server_duration_seconds_bucket{env="prod", job="tfd-api", route!="unmatched"}[10m]))) > 1.5
-          and
-          sum by (job, env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-api"}[10m])) > 0.05
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "API p95 latency is {{ $value | humanizeDuration }}"
-          description: "The API's 95th percentile response time (routes that exist; scanner hits on unknown URLs are left out) has been above 1.5 s for 10 minutes. The slowest requests carry a trace link (exemplar) on the TFD Services latency panel. If the container is also throttled (ContainerCpuThrottled, or the CPU throttling panel), raise its CPU limit first."
-          runbook: "homelab-journey/docs/monitoring-phase3.md#apilatencyhigh"
 
       - alert: SsrLatencyHigh
         expr: |

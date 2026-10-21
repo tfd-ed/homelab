@@ -1,4 +1,4 @@
-# Monitoring, Phase 5 (slices A and B): backups, deploys, web vitals, SSD wear, tunnel health, a second alert route
+# Monitoring, Phase 5 (slices A, B and C): backups, deploys, web vitals, SSD wear, tunnel health, a second alert route, SLOs, synthetic journeys
 
 Part of the observability plan (`tfd-blog-next/docs/OBSERVABILITY_CONTROL_ROOM_PLAN.md`, section 10, Phase 5). This runbook covers the pieces of slices A and B that live in this repo. Slice A is the first half (backups, deploy annotations); slice B starts at "Web vitals" below. The other two pieces (deploy markers and the Deployments page) are in `tfd-api-next` and `tfd-blog-next`; the fourth, the trusted client IP, was already done by the rate-limit work (see the plan).
 
@@ -193,3 +193,88 @@ How it was checked: the configuration was rendered for all four combinations (no
 - `nvme-smart-metrics.py`: 9 unit tests (`python3 -m unittest -v test_nvme_smart_metrics` in `infrastructure/files/`), a run against a fake `smartctl` and `lvs`, and `promtool check metrics` on its output. Not run against a real NVMe: do that first (`ssh proxmox sudo /usr/local/bin/nvme-smart-metrics.py`, then look at the file).
 - The dashboard JSON was loaded by a real Grafana 10.2.3.
 - `ansible-playbook --syntax-check` for both new playbooks. They have **not** been run against the real hosts.
+
+# Slice C
+
+| Item | What it adds | Where |
+|---|---|---|
+| 5.1.5 SLOs and burn-rate alerts | Three objectives with a 30-day error budget, and alerts that fire on how fast the budget is spent instead of on a bare threshold | `prometheus/slo/slos.sloth.yml` (source), `alerts/slo.yml` (generated), `tests/slo.test.yml` |
+| 5.2.1 Synthetic journeys | A headless browser on the ci-cd VM walks the site every 10 minutes and publishes pass/fail and timing | `services/synthetic-setup.yml`, `services/files/synthetic/`, `alerts/synthetic.yml`, `tests/synthetic.test.yml` |
+
+Apply order: `synthetic-setup.yml` first (it also installs node-exporter on the ci-cd VM), then `monitoring-setup.yml` once (new scrape job `node-exporter-ci`, `alerts/slo.yml`, `alerts/synthetic.yml`), then `tfd-api-next`, then `tfd-blog-next`, dev before prod. The SLOs work without the apps being deployed (they read series that already exist); the synthetic user agent is only recognised, and kept out of the traffic figures, once the API and the site are deployed.
+
+## SLOs
+
+The source is `prometheus/slo/slos.sloth.yml`. The rules in `alerts/slo.yml` are **generated** by [Sloth](https://sloth.dev) and committed as plain YAML, so nothing new runs on the monitoring VM. After editing the spec:
+
+```bash
+cd ansible/playbooks/services/files/monitoring/prometheus
+slo/generate.sh          # needs Docker; runs Sloth, then promtool check rules
+docker run --rm --entrypoint promtool -v "$PWD:/w" prom/prometheus:v2.48.1 test rules /w/tests/slo.test.yml
+```
+
+| SLO | Good means | Target | SLI query |
+|---|---|---|---|
+| `site-available` | the Blackbox probe of `tfdevs.com` succeeds | 99.5 % | `probe_success{probe="site", env="prod"}` |
+| `api-available` | the response is not 5xx, on routes that exist | 99.5 % | `http_server_duration_seconds_count`, `route!="unmatched"`, `traffic!="synthetic"` |
+| `api-fast` | the response takes under 1 second | 95 % | the `le="1"` bucket over the count, same filters |
+
+The targets are first guesses from the plan: look at the numbers on the control room's **Reliability** page after a month and tune them (edit the spec, regenerate). 99.5 % is about 3.6 hours of failure in 30 days.
+
+Each SLO gets recording rules (`slo:sli_error:ratio_rate5m` up to `ratio_rate30d`, `slo:period_error_budget_remaining:ratio`, `slo:objective:ratio`) and two alerts named `SiteAvailabilitySloBurn`, `ApiAvailabilitySloBurn` and `ApiLatencySloBurn`, each with a **page** and a **ticket** form, told apart by the label `sloth_severity`:
+
+| Form | Severity | Fires when the budget would be gone in about | Windows (both must burn) |
+|---|---|---|---|
+| page | `critical` | 2 days (14.4x) | 1 h and 5 min |
+| page | `critical` | 5 days (6x) | 6 h and 30 min |
+| ticket | `warning` | 10 days (3x) | 1 day and 2 h |
+| ticket | `warning` | 30 days (1x) | 3 days and 6 h |
+
+Requiring the short window as well as the long one is what stops a blip from paging: a 3-minute outage after days of health does nothing (`tests/slo.test.yml`).
+
+**What changed in the old alerts.** `AppHighErrorRate` now watches the web app's page renders only (`tfd-blog`), and `ApiLatencyHigh` is gone: the API's 5xx rate and latency are the SLO burn alerts above. `SsrLatencyHigh` is unchanged. The API series carry a new label `traffic` (`visitor` or `synthetic`); `traffic!="synthetic"` also matches the old series that have no label, so the rules work before and after the API is deployed.
+
+**Reading the 30-day figures.** Prometheus keeps 30 days, so the figure needs a full month of data to be exact. Until then it is computed from what exists (the control room says "about N days of data so far"). The first week's numbers are noisy: do not tune anything from them.
+
+## Synthetic journeys
+
+`services/files/synthetic/` is a small Playwright program, run by `synthetic.timer` on the ci-cd VM every 10 minutes inside the pinned `mcr.microsoft.com/playwright:v1.49.1-noble` image (1 GB memory limit). Each journey gets a fresh browser context and 45 seconds, and sends the User-Agent token `TFD-Synthetic/1.0`; the site and the API count that as `traffic="synthetic"` and `device=synthetic`, so the journeys stay out of the Overview, the web vitals and the SLOs.
+
+| Environment | Journey | Passes when |
+|---|---|---|
+| prod, dev | `home` | the page answers, has a title, shows content and is not the error page |
+| prod, dev | `courses`, `course-detail` | the list has a course, and opening the first one shows its heading |
+| prod, dev | `article` | the article list works; the first article opens if there is one |
+| prod, dev | `certificate-verify` | the verify page has its input |
+| prod, dev | `health-ready` | `/api/health/ready` answers 200 |
+| dev only | `login`, `open-course`, `enrollments` | sign-in through `/auth/login-cookie` works, and `/portal` and `/portal/courses` stay open |
+| dev only | `admin-page` | `/admin/users` shows its table (only with `SYNTHETIC_DEV_ADMIN=1`) |
+
+They check what a person notices first, not wording, so a copy change never fails one. **Production runs public journeys only**, because production has no password login. The signed-in journeys need a dedicated low-privilege account on **dev** (never an administrator's): put `SYNTHETIC_DEV_USER` and `SYNTHETIC_DEV_PASS` in `ansible/.env` before the playbook; without them they are skipped.
+
+```bash
+cd ansible && set -a && . ./.env && set +a
+ansible-playbook playbooks/services/synthetic-setup.yml      # runner, timer, node-exporter :9100, runs once
+ansible-playbook playbooks/services/monitoring-setup.yml     # scrape job node-exporter-ci, alerts/synthetic.yml
+ssh ci-cd 'journalctl -u synthetic -n 30 --no-pager; ls /opt/synthetic/artifacts'
+```
+
+Results are textfile metrics (`synthetic_success`, `synthetic_duration_seconds`, `synthetic_consecutive_failures`, `synthetic_last_success_timestamp_seconds`, `synthetic_last_run_timestamp_seconds`). A screenshot of every failure is kept in `/opt/synthetic/artifacts` (newest 50).
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| `SyntheticJourneyFailing` | a journey failed 2 runs in a row (20 min) | warning |
+| `SyntheticProdJourneyDown` | a production journey failed 4 runs in a row (40 min) | critical |
+| `SyntheticRunsStale` | the last result is over 40 min old (the runner stopped but node-exporter still serves the file) | warning |
+| `SyntheticMetricsMissing` | nothing published for an hour (not installed, or not scraped) | warning |
+
+One failed run alerts nobody: a page can fail once for a reason nobody needs to know. If a journey fails for a real reason, the screenshot and `journalctl -u synthetic` say which step. If one flaps, fix the journey (`journeys.mjs`) rather than raising the thresholds.
+
+**Not verified on the real hosts.** The runner was tested in the Playwright image against a stand-in site (passes, failures, the error-page marker, state and metrics file), and the alerts with promtool. It has not run against tfdevs.com, and the dev sign-in has not run at all: the first thing to check after applying is `journalctl -u synthetic`, and that a login cookie set by the API on `api-dev.tfdevs.com` is accepted by `dev.tfdevs.com` (same cookie domain).
+
+## Slice C: how it was checked
+
+- `slo/generate.sh` (Sloth v0.11.0, then `promtool check rules`: 51 rules); `tests/slo.test.yml` and `tests/synthetic.test.yml` pass, and so do all the older test files (`app.test.yml` was cut down to the SSR error alert).
+- The recording rules were loaded by a real Prometheus 2.48.1 scraping a synthetic exporter: the error ratio came out as expected (visitor 5xx only, synthetic requests and unknown URLs left out) and `tfd-api-next`'s queries read it.
+- `files/synthetic`: 9 unit tests (`node --test`), and a run of `run.mjs` in the Playwright container against a stand-in site, with pages broken on purpose (failure counted, screenshot saved, metrics file valid).
+- `ansible-playbook --syntax-check synthetic-setup.yml`, and a `--check` run against the ci-cd VM (stops at the timer, which does not exist yet). It has **not** been applied.

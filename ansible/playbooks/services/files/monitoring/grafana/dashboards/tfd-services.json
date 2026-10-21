@@ -114,7 +114,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(http_server_duration_seconds_count{traffic!=\"probe\",job=\"tfd-api\",env=~\"$env\"}[5m]))",
+          "expr": "sum(rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=\"tfd-api\",env=~\"$env\"}[5m]))",
           "instant": true
         }
       ],
@@ -163,7 +163,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(http_server_duration_seconds_count{traffic!=\"probe\",job=\"tfd-blog\",env=~\"$env\"}[5m]))",
+          "expr": "sum(rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=\"tfd-blog\",env=~\"$env\"}[5m]))",
           "instant": true
         }
       ],
@@ -212,7 +212,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(http_server_duration_seconds_count{traffic!=\"probe\",job=\"tfd-api\",env=~\"$env\",status_class=\"5xx\"}[5m])) / sum(rate(http_server_duration_seconds_count{traffic!=\"probe\",job=\"tfd-api\",env=~\"$env\"}[5m]))",
+          "expr": "sum(rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=\"tfd-api\",env=~\"$env\",status_class=\"5xx\"}[5m])) / sum(rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=\"tfd-api\",env=~\"$env\"}[5m]))",
           "instant": true
         }
       ],
@@ -269,7 +269,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[5m])))",
           "instant": true
         }
       ],
@@ -326,7 +326,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[5m])))",
           "instant": true
         }
       ],
@@ -445,7 +445,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (job) (rate(http_server_duration_seconds_count{traffic!=\"probe\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[$__rate_interval]))",
+          "expr": "sum by (job) (rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[$__rate_interval]))",
           "legendFormat": "{{job}}"
         }
       ],
@@ -489,7 +489,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (status_class) (rate(http_server_duration_seconds_count{traffic!=\"probe\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[$__rate_interval]))",
+          "expr": "sum by (status_class) (rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[$__rate_interval]))",
           "legendFormat": "{{status_class}}"
         }
       ],
@@ -537,7 +537,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (job) (rate(http_server_duration_seconds_count{traffic!=\"probe\",job=~\"tfd-api|tfd-blog\",env=~\"$env\",status_class=\"5xx\"}[$__rate_interval])) / sum by (job) (rate(http_server_duration_seconds_count{traffic!=\"probe\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[$__rate_interval]))",
+          "expr": "sum by (job) (rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=~\"tfd-api|tfd-blog\",env=~\"$env\",status_class=\"5xx\"}[$__rate_interval])) / sum by (job) (rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[$__rate_interval]))",
           "legendFormat": "{{job}}"
         }
       ],
@@ -582,7 +582,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (status) (rate(http_server_responses_total{traffic!=\"probe\",job=~\"tfd-api|tfd-blog\",env=~\"$env\",status!~\"2..\"}[$__rate_interval]))",
+          "expr": "sum by (status) (rate(http_server_responses_total{traffic!~\"probe|synthetic\",job=~\"tfd-api|tfd-blog\",env=~\"$env\",status!~\"2..\"}[$__rate_interval]))",
           "legendFormat": "{{status}}"
         }
       ],
@@ -644,17 +644,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p95"
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-api\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p99"
         }
       ],
@@ -698,17 +698,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p95"
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-blog\",env=~\"$env\",route!=\"unmatched\"}[$__rate_interval])))",
           "legendFormat": "p99"
         }
       ],
@@ -752,7 +752,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (le) (increase(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-api\",env=~\"$env\"}[$__rate_interval]))",
+          "expr": "sum by (le) (increase(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-api\",env=~\"$env\"}[$__rate_interval]))",
           "format": "heatmap",
           "legendFormat": "{{le}}",
           "exemplar": true
@@ -807,7 +807,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (le) (increase(http_server_duration_seconds_bucket{traffic!=\"probe\",job=\"tfd-blog\",env=~\"$env\"}[$__rate_interval]))",
+          "expr": "sum by (le) (increase(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=\"tfd-blog\",env=~\"$env\"}[$__rate_interval]))",
           "format": "heatmap",
           "legendFormat": "{{le}}",
           "exemplar": true
@@ -874,7 +874,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(15, sum by (job, route) (rate(http_server_duration_seconds_count{traffic!=\"probe\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[$__range])))",
+          "expr": "topk(15, sum by (job, route) (rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[$__range])))",
           "instant": true,
           "format": "table"
         }
@@ -930,7 +930,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(15, histogram_quantile(0.95, sum by (le, job, route) (rate(http_server_duration_seconds_bucket{traffic!=\"probe\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[1h]))) and on (job, route) sum by (job, route) (rate(http_server_duration_seconds_count{traffic!=\"probe\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[1h])) > 0.002)",
+          "expr": "topk(15, histogram_quantile(0.95, sum by (le, job, route) (rate(http_server_duration_seconds_bucket{traffic!~\"probe|synthetic\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[1h]))) and on (job, route) sum by (job, route) (rate(http_server_duration_seconds_count{traffic!~\"probe|synthetic\",job=~\"tfd-api|tfd-blog\",env=~\"$env\"}[1h])) > 0.002)",
           "instant": true,
           "format": "table"
         }

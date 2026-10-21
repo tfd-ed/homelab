@@ -1,0 +1,202 @@
+# ============================================================
+# Synthetic journeys on the ci-cd VM (observability plan, Phase 5, slice C, item 5.2.1)
+#
+# A headless Chromium (Playwright, in Docker) opens the public pages of production every 10 minutes
+# and the same pages plus the signed-in ones on dev, and publishes pass/fail and timing as
+# node-exporter textfile metrics. alerts/synthetic.yml warns after two failed runs in a row.
+# Every request carries the User-Agent token "TFD-Synthetic/1.0", which the site and the API count
+# apart from visitors (they stay out of the Overview and the SLO numbers).
+#
+# What it does on the VM:
+#   /opt/synthetic            the runner (files/synthetic) and its node_modules
+#   /opt/synthetic/artifacts  a screenshot of every failed journey (newest 50 kept)
+#   synthetic.service/.timer  one run every 10 minutes, in the Playwright container (1 GB, no restart loop)
+#   node-exporter :9100       host metrics of this VM and the textfile directory the runner writes to
+#
+# Production runs public journeys only, because production has no password login (SSO only). The
+# signed-in journeys run on dev with a dedicated low-privilege account through /auth/login-cookie;
+# they are skipped until you set the account:
+#   SYNTHETIC_DEV_USER, SYNTHETIC_DEV_PASS   in ansible/.env (never an administrator's account)
+#   SYNTHETIC_DEV_ADMIN=1                    only if that account may open /admin/users
+#
+# Usage:
+#   cd ansible && set -a && . ./.env && set +a
+#   ansible-playbook playbooks/services/synthetic-setup.yml
+#   ansible-playbook playbooks/services/monitoring-setup.yml     # scrape job node-exporter-ci + alerts/synthetic.yml
+# Then docs/monitoring-phase5.md, "Synthetic journeys".
+# ============================================================
+- name: Install the synthetic journeys runner on the ci-cd VM
+  hosts: ci-cd
+  become: yes
+  gather_facts: yes
+
+  vars:
+    # Must match the playwright version in files/synthetic/package.json.
+    playwright_image: "mcr.microsoft.com/playwright:v1.49.1-noble"
+    node_exporter_version: "v1.8.2"
+    synthetic_dir: /opt/synthetic
+    textfile_dir: /var/lib/node_exporter/textfile_collector
+    prod_site: "https://tfdevs.com"
+    dev_site: "https://dev.tfdevs.com"
+    dev_api: "https://api-dev.tfdevs.com"
+    dev_user: "{{ lookup('ansible.builtin.env', 'SYNTHETIC_DEV_USER') }}"
+    dev_pass: "{{ lookup('ansible.builtin.env', 'SYNTHETIC_DEV_PASS') }}"
+    dev_admin: "{{ lookup('ansible.builtin.env', 'SYNTHETIC_DEV_ADMIN') }}"
+    run_interval: 10min
+
+  tasks:
+    - name: Check that Docker is running
+      command: docker info --format "{{ '{{' }}.ServerVersion{{ '}}' }}"
+      changed_when: false
+
+    - name: Create the directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ synthetic_dir }}"
+        - "{{ synthetic_dir }}/artifacts"
+        - "{{ synthetic_dir }}/state"
+        - "{{ textfile_dir }}"
+
+    - name: Install the runner
+      copy:
+        src: "{{ playbook_dir }}/files/synthetic/{{ item }}"
+        dest: "{{ synthetic_dir }}/{{ item }}"
+        mode: "0644"
+      loop:
+        - package.json
+        - lib.mjs
+        - journeys.mjs
+        - run.mjs
+      register: runner_files
+
+    - name: Check whether the Playwright package is installed
+      stat:
+        path: "{{ synthetic_dir }}/node_modules/playwright"
+      register: playwright_installed
+
+    - name: Pull the Playwright image (browsers included)
+      command: docker pull {{ playwright_image }}
+      register: pull
+      changed_when: "'Downloaded newer image' in pull.stdout"
+
+    - name: Install the Playwright package
+      command: >-
+        docker run --rm -v {{ synthetic_dir }}:/work -w /work {{ playwright_image }}
+        npm install --omit=dev --no-audit --no-fund
+      when: not playwright_installed.stat.exists or (runner_files.results | selectattr('item', 'equalto', 'package.json') | map(attribute='changed') | first)
+      changed_when: true
+
+    # Credentials stay out of the unit file and out of the process list; root reads them from here.
+    - name: Write the runner's settings
+      copy:
+        dest: "{{ synthetic_dir }}/synthetic.env"
+        mode: "0600"
+        content: |
+          SYNTH_PROD_SITE={{ prod_site }}
+          SYNTH_DEV_SITE={{ dev_site }}
+          SYNTH_DEV_API={{ dev_api }}
+          SYNTH_DEV_USER={{ dev_user }}
+          SYNTH_DEV_PASS={{ dev_pass }}
+          SYNTH_DEV_ADMIN={{ 1 if dev_admin == '1' else 0 }}
+      no_log: true
+
+    - name: Install the service that runs the journeys once
+      copy:
+        dest: /etc/systemd/system/synthetic.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Synthetic journeys for tfdevs.com
+          After=docker.service network-online.target
+          Requires=docker.service
+
+          [Service]
+          Type=oneshot
+          # Exit 1 means "a journey failed", which the metrics report; only a crash is a unit failure.
+          SuccessExitStatus=1
+          TimeoutStartSec=600
+          ExecStartPre=-/usr/bin/docker rm -f synthetic-run
+          ExecStart=/usr/bin/docker run --rm --init --ipc=host --name synthetic-run --memory 1g \
+            --env-file {{ synthetic_dir }}/synthetic.env \
+            -v {{ synthetic_dir }}:/work:ro \
+            -v {{ synthetic_dir }}/artifacts:/artifacts \
+            -v {{ synthetic_dir }}/state:/state \
+            -v {{ textfile_dir }}:/textfile \
+            -w /work {{ playwright_image }} node run.mjs
+      register: unit
+
+    - name: Install the timer
+      copy:
+        dest: /etc/systemd/system/synthetic.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run the synthetic journeys every {{ run_interval }}
+
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec={{ run_interval }}
+          RandomizedDelaySec=30
+          AccuracySec=10s
+
+          [Install]
+          WantedBy=timers.target
+      register: timer
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+      when: unit.changed or timer.changed
+
+    - name: Deploy node-exporter with the textfile collector
+      community.docker.docker_container:
+        name: node-exporter
+        image: "prom/node-exporter:{{ node_exporter_version }}"
+        state: started
+        restart_policy: unless-stopped
+        pid_mode: host
+        ports:
+          - "9100:9100"
+        volumes:
+          - "/:/host:ro,rslave"
+          - "{{ textfile_dir }}:/textfile:ro"
+        command:
+          - --path.rootfs=/host
+          - --collector.textfile.directory=/textfile
+          - --no-collector.netdev
+          - --no-collector.netclass
+          - --no-collector.netstat
+          - --no-collector.sockstat
+          - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)
+
+    - name: Enable the timer
+      systemd:
+        name: synthetic.timer
+        enabled: true
+        state: started
+
+    - name: Run the journeys once now
+      systemd:
+        name: synthetic.service
+        state: started
+      # A oneshot unit: this returns when the run has finished.
+
+    - name: Read the results through node-exporter
+      uri:
+        url: "http://127.0.0.1:9100/metrics"
+        return_content: true
+      register: metrics
+      until: "'synthetic_success' in metrics.content"
+      retries: 6
+      delay: 5
+
+    - name: Summary
+      debug:
+        msg:
+          - "Results: {{ metrics.content.splitlines() | select('match', '^synthetic_success') | list }}"
+          - "Signed-in journeys: {{ 'on (account ' ~ dev_user ~ ')' if (dev_user | length > 0 and dev_pass | length > 0) else 'skipped: set SYNTHETIC_DEV_USER and SYNTHETIC_DEV_PASS' }}"
+          - "Screenshots of failures: {{ synthetic_dir }}/artifacts; the log: journalctl -u synthetic"
+          - "Next: re-run playbooks/services/monitoring-setup.yml so Prometheus scrapes node-exporter on {{ ansible_host }}:9100 (job node-exporter-ci) and loads alerts/synthetic.yml."
