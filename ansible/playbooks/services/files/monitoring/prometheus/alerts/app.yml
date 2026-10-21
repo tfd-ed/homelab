@@ -215,7 +215,7 @@ groups:
         annotations:
           summary: "The API is answering 429 to {{ $value | humanize }} requests per second"
           description: "Rate limiting is rejecting a lot of requests: a client bug looping, a scraper, or an attack. The request log in Loki (`| json | status = 429`) shows the routes and countries."
-          runbook: "homelab-journey/docs/monitoring-phase3.md#throttlingspike"
+          runbook: "homelab-journey/docs/runbooks/api-flood.md"
 
       - alert: LoginFailureSpike
         expr: sum by (env) (rate(http_server_duration_seconds_count{env="prod", job="tfd-api", route=~"/auth/login.*", status_class="4xx"}[5m])) > 0.5
@@ -225,7 +225,7 @@ groups:
         annotations:
           summary: "Failed logins: {{ $value | humanize }} per second"
           description: "Login attempts are failing at a high rate: credential stuffing, or a broken login flow after a deploy."
-          runbook: "homelab-journey/docs/monitoring-phase3.md#throttlingspike"
+          runbook: "homelab-journey/docs/runbooks/login-failures.md"
 
   - name: tracing
     rules:

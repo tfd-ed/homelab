@@ -19,7 +19,7 @@ tests:
             exp_annotations:
               summary: "A password account was created in PRODUCTION"
               description: "tfd-api counted a user created with a password in prod, which must never happen (SSO only). Find it: db.users.find({password: {$exists: true}}) on tfd-api-db-prod, and the request in /admin/ops/requests (POST /users, route /auth/*). Check PASSWORD_AUTH_ENABLED and APP_ENV on the prod deployment, then delete the account."
-              runbook: "tfd-blog-next/docs/SECURITY_INCIDENT_PASSWORD_REGISTRATION_2026-10-16.md"
+              runbook: "homelab-journey/docs/runbooks/password-account-in-prod.md"
 
   - name: password accounts on dev never page
     interval: 1m

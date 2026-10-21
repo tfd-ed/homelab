@@ -21,7 +21,7 @@ groups:
         annotations:
           summary: "No good {{ $labels.backup }} backup for over 26 hours"
           description: "The last successful {{ $labels.backup }} backup on {{ $labels.instance }} is older than 26 hours (the job runs daily at 02:00). Read /var/log/db-backup.log on the database VM and run /opt/databases/backup.sh by hand. Backups are on the same VM, so they do not survive losing it (observability plan, open decision 10)."
-          runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+          runbook: "homelab-journey/docs/runbooks/backup-stale.md"
 
       - alert: BackupLastRunFailed
         expr: backup_last_run_success == 0
@@ -31,7 +31,7 @@ groups:
         annotations:
           summary: "The last {{ $labels.backup }} backup run failed"
           description: "The {{ $labels.backup }} job failed in its most recent run on {{ $labels.instance }}. The previous good backup is kept. If this is still failing tomorrow, BackupStale pages. See /var/log/db-backup.log."
-          runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+          runbook: "homelab-journey/docs/runbooks/backup-stale.md"
 
       # A dump that "succeeded" but is far smaller than usual is usually an empty or half-finished one.
       - alert: BackupTooSmall
@@ -44,7 +44,7 @@ groups:
         annotations:
           summary: "The {{ $labels.backup }} backup is less than half its usual size"
           description: "The last {{ $labels.backup }} backup file is under half the 7-day average. It may be incomplete. Open the file, and compare it with the one before in /opt/databases/backups."
-          runbook: "homelab-journey/docs/monitoring-phase5.md#backups"
+          runbook: "homelab-journey/docs/runbooks/backup-stale.md"
 
       # Nothing is published: the exporter is not running, the textfile directory is not mounted, or
       # the script has never finished. The 30 hours leave room for the first nightly run after a deploy.

@@ -9,6 +9,8 @@ Part of the observability plan (`tfd-blog-next/docs/OBSERVABILITY_CONTROL_ROOM_P
 
 ## Backups
 
+When an alert fires, start with [runbooks/backup-stale.md](runbooks/backup-stale.md); this section is the reference behind it.
+
 ### What changed
 
 `/opt/databases/backup.sh` (cron, 02:00, written by `playbooks/services/database-setup.yml`) used to run five jobs and print "Backup completed" whatever happened. A failed dump behind `| gzip` left a small valid-looking file. Now:
