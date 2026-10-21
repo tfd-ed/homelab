@@ -88,60 +88,88 @@
     # 1. Datacenter firewall: enable only when it is off, and never overwrite a real configuration
     # ------------------------------------------------------------------
     - name: Read the datacenter firewall file
-      ansible.builtin.stat:
-        path: /etc/pve/firewall/cluster.fw
-      register: cluster_fw
-      tags: [firewall]
-
-    - name: Read its content
       ansible.builtin.slurp:
         src: /etc/pve/firewall/cluster.fw
-      register: cluster_fw_content
-      when: cluster_fw.stat.exists
+      register: cluster_fw_raw
+      failed_when: false
       tags: [firewall]
 
-    - name: Refuse to touch an existing datacenter firewall configuration
+    - name: Decide what the datacenter firewall needs
+      ansible.builtin.set_fact:
+        cluster_fw_text: "{{ (cluster_fw_raw.content | b64decode) if (cluster_fw_raw.content is defined) else '' }}"
+      tags: [firewall]
+
+    # "ours" = nothing but the four lines this playbook writes (enable may be 0 after a rollback).
+    - name: Classify it
+      ansible.builtin.set_fact:
+        cluster_fw_missing: "{{ cluster_fw_text | trim == '' }}"
+        cluster_fw_ours: "{{ (cluster_fw_text | trim | regex_replace('(?m)^enable: [01]$', 'enable: X')) == '[OPTIONS]\nenable: X\npolicy_in: ACCEPT\npolicy_out: ACCEPT' }}"
+        cluster_fw_on: "{{ cluster_fw_text is search('(?m)^enable:\\s*1') }}"
+        cluster_fw_accept: "{{ cluster_fw_text is search('(?m)^policy_in:\\s*ACCEPT') }}"
+      tags: [firewall]
+
+    - name: Refuse to touch a datacenter firewall configuration that is not ours and not permissive
       ansible.builtin.assert:
         that:
-          - (cluster_fw_content.content | b64decode) is search('(?m)^enable:\s*1')
-          - (cluster_fw_content.content | b64decode) is search('(?m)^policy_in:\s*ACCEPT')
+          - cluster_fw_missing or cluster_fw_ours or (cluster_fw_on and cluster_fw_accept)
         fail_msg: >-
-          /etc/pve/firewall/cluster.fw already exists and is not "enable: 1" with "policy_in: ACCEPT".
-          Enable it by hand with a policy that keeps this host's SSH on port 1308 reachable, then
-          re-run so only the rules for VM {{ agent_vmid }} are added.
-      when: cluster_fw.stat.exists
+          /etc/pve/firewall/cluster.fw has a configuration this playbook did not write and it is not
+          "enable: 1" with "policy_in: ACCEPT". Enable it by hand with a policy that keeps this host's
+          SSH on port 1308 reachable, then re-run so only the rules for VM {{ agent_vmid }} are added.
+      tags: [firewall]
+
+    - name: Work out whether the datacenter firewall must be switched on now
+      ansible.builtin.set_fact:
+        cluster_fw_needs_enable: "{{ cluster_fw_missing or (cluster_fw_ours and not cluster_fw_on) }}"
       tags: [firewall]
 
     - name: Arm the lock-out rollback timer before enabling the datacenter firewall
       ansible.builtin.shell: |
+        systemctl stop agent-fw-rollback.timer agent-fw-rollback.service 2>/dev/null || true
         systemctl reset-failed agent-fw-rollback.service 2>/dev/null || true
         systemd-run --unit=agent-fw-rollback --on-active={{ agent_fw_rollback_minutes }}m \
           /bin/sh -c "sed -i 's/^enable: 1/enable: 0/' /etc/pve/firewall/cluster.fw && pve-firewall restart"
-      when: not cluster_fw.stat.exists
+      when: cluster_fw_needs_enable | bool
       register: rollback_armed
       changed_when: rollback_armed.rc == 0
       tags: [firewall]
 
+    # /etc/pve is pmxcfs: it refuses the chmod and rename that Ansible's copy module always does,
+    # so these files are written with a plain redirect, only when the content differs.
     - name: Enable the datacenter firewall with permissive policies (host and other VMs unchanged)
-      ansible.builtin.copy:
-        dest: /etc/pve/firewall/cluster.fw
-        content: |
+      ansible.builtin.shell: |
+        set -eu
+        f=/etc/pve/firewall/cluster.fw
+        new=$(mktemp)
+        cat > "$new"
+        if cmp -s "$new" "$f" 2>/dev/null; then echo unchanged; else cat "$new" > "$f"; echo changed; fi
+        rm -f "$new"
+      args:
+        executable: /bin/bash
+        stdin: |
           [OPTIONS]
           enable: 1
           policy_in: ACCEPT
           policy_out: ACCEPT
-        unsafe_writes: true # /etc/pve is pmxcfs: no rename, no chmod
-      when: not cluster_fw.stat.exists
+      register: dc_write
+      changed_when: "'changed' in dc_write.stdout"
+      when: cluster_fw_needs_enable | bool
       tags: [firewall]
 
     # ------------------------------------------------------------------
     # 2. The VM's own rules and the NIC flag
     # ------------------------------------------------------------------
     - name: Write the rules for the agent VM
-      ansible.builtin.copy:
-        dest: "/etc/pve/firewall/{{ agent_vmid }}.fw"
-        unsafe_writes: true
-        content: |
+      ansible.builtin.shell: |
+        set -eu
+        f=/etc/pve/firewall/{{ agent_vmid }}.fw
+        new=$(mktemp)
+        cat > "$new"
+        if cmp -s "$new" "$f" 2>/dev/null; then echo unchanged; else cat "$new" > "$f"; echo changed; fi
+        rm -f "$new"
+      args:
+        executable: /bin/bash
+        stdin: |
           # Managed by ansible/playbooks/networking/agent-runner-firewall.yml. Edit there.
           # First match wins. The VM runs code an attacker may influence: it must not reach the LAN.
           [OPTIONS]
@@ -162,6 +190,8 @@
           {% for cidr in denied_destinations %}
           OUT DROP -dest {{ cidr }} -log nolog
           {% endfor %}
+      register: vm_rules
+      changed_when: "'changed' in vm_rules.stdout"
       tags: [firewall]
 
     - name: Turn the firewall flag on for the VM's first NIC
