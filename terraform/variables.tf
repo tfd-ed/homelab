@@ -118,7 +118,7 @@ variable "vms" {
     }
     n8n = {
       cores       = 2
-      memory      = 4096
+      memory      = 2048
       disk_size   = "50G"
       ip_address  = "192.168.100.230"
       description = "n8n Automation - Workflows and automation"
@@ -132,10 +132,10 @@ variable "vms" {
     }
     ai-vm = {
       cores       = 4
-      memory      = 6144
-      disk_size   = "20G"
+      memory      = 8192
+      disk_size   = "60G"
       ip_address  = "192.168.100.250"
-      description = "AI VM - TinyLlama 1.1B via Ollama"
+      description = "Agent runner - GitHub Actions runner for the AI fix agent (was Ollama)"
     }
     minio-vm = {
       cores       = 2

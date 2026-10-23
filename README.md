@@ -80,18 +80,18 @@ This homelab runs on Proxmox VE and uses Infrastructure as Code (Terraform + Ans
 | database-vm | 192.168.100.205 | 4 | 6 GB | 200 GB | Centralized database server |
 | app-gateway | 192.168.100.210 | 2 | 2 GB | 20 GB | Nginx reverse proxy |
 | monitoring | 192.168.100.220 | 2 | 6 GB | 80 GB | Prometheus, Alertmanager, Loki, Grafana |
-| n8n | 192.168.100.230 | 2 | 4 GB | 50 GB | n8n workflow automation |
+| n8n | 192.168.100.230 | 2 | 2 GB | 50 GB | n8n workflow automation (workflows inactive) |
 | ci-cd | 192.168.100.240 | 4 | 10 GB | 100 GB | GitHub Actions + Docker registry |
-| ai-vm | 192.168.100.250 | 4 | 6 GB | 20 GB | Ollama + TinyLlama 1.1B |
+| ai-vm | 192.168.100.250 | 4 | 8 GB | 60 GB | Agent runner: isolated GitHub Actions runner for the AI fix agent (was Ollama) |
 
 **Total Resources:** 32 CPU cores, 58 GB RAM, 820 GB storage  
 **Available for Host:** ~6 GB RAM (~9%), ~180 GB storage
 
 **Resource Allocation Notes:**
 - k8s workers reduced to 10 GB each to make room for AI VM
-- n8n reduced to 4 GB (sufficient for workflow automation)
+- n8n reduced to 2 GB (workflows are inactive; it used about 0.8 GB when checked)
 - ci-cd increased to 10 GB to give Nuxt/NestJS builds and concurrent runner jobs more headroom
-- ai-vm runs Ollama with TinyLlama 1.1B — lightweight LLM inference
+- ai-vm was an Ollama experiment; it is being repurposed as the isolated agent runner (see `tfd-blog-next/docs/AI_OPS_AGENT.md`, section 5.5). It gets 2 GB from n8n, so the VM total is unchanged
 - ~6 GB reserved for Proxmox host (tight, so avoid further VM RAM increases without freeing memory elsewhere)
 - Storage allocation allows for data growth and logs
 
@@ -133,7 +133,7 @@ homelab-journey/
 │       │   ├── node-exporter-setup.yml
 │       │   ├── n8n-setup.yml
 │       │   ├── cicd-setup.yml
-│       │   ├── ai-vm-setup.yml
+│       │   ├── agent-runner-setup.yml   # isolated GitHub Actions runner for the AI fix agent
 │       │   ├── plausible-setup.yml
 │       │   ├── glitchtip-setup.yml   # error tracking (Phase 2)
 │       │   ├── database-exporters-setup.yml   # MongoDB + Redis exporters (Phase 3)
@@ -357,29 +357,21 @@ ansible-playbook playbooks/services/node-exporter-setup.yml
 | `blackbox-http` | public URLs | tfdevs.com, api, dev, api-dev, plausible through Cloudflare |
 | `blackbox-tcp` | VM SSH, DB ports, ingress NodePort, registry | Pinpoints which hop failed |
 
-## 8. Setup AI VM (Ollama + TinyLlama)
+## 8. Setup the agent runner (ai-vm)
 
-The AI VM runs [Ollama](https://ollama.com) with the TinyLlama 1.1B model for lightweight on-premise LLM inference.
+`ai-vm` (192.168.100.250) is the isolated GitHub Actions runner for the AI fix agent (plan: `tfd-blog-next/docs/AI_OPS_AGENT.md`, section 5.5). It used to run Ollama; that was an unused experiment and is removed. The VM runs code an attacker may influence, so it holds no homelab credential and the Proxmox firewall denies it the whole LAN.
 
 ```bash
-./script/run-ai-vm-setup.sh
+./script/run-agent-runner-setup.sh software   # Docker, Node 22, pnpm, gh, runner files; removes Ollama
+./script/run-agent-runner-setup.sh firewall   # LAN denied for VM 108; arms a 5 minute rollback
+# check SSH to the Proxmox host and the web UI on :8006, then:
+./script/run-agent-runner-setup.sh confirm
+# register the runner (token from the GitHub API, see the header of agent-runner-setup.yml):
+#   ssh ubuntu@192.168.100.250 sudo agent-runner-register https://github.com/tfd-ed/tfd-next-api <token>
+./script/run-agent-runner-setup.sh snapshot   # clean snapshot, restored after jobs
 ```
 
-This playbook will:
-- Install Ollama runtime
-- Configure it to listen on `0.0.0.0:11434` (LAN-accessible)
-- Pull the `tinyllama` model automatically
-
-**Verify:**
-```bash
-curl http://192.168.100.250:11434/api/generate \
-  -d '{"model":"tinyllama","prompt":"Hello, what can you do?","stream":false}'
-```
-
-**List available models:**
-```bash
-curl http://192.168.100.250:11434/api/tags
-```
+Details, the lock-out safety and the verification commands are in the headers of `ansible/playbooks/services/agent-runner-setup.yml` and `ansible/playbooks/networking/agent-runner-firewall.yml`. The runner has only the label `agent`, so the deploy workflows (`runs-on: [self-hosted]`) never run on it.
 
 ## 9. Restrict network access
 

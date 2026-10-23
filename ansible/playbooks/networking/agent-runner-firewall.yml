@@ -1,0 +1,311 @@
+---
+# ============================================================
+# Agent runner: deny the LAN, and reset the VM from a clean snapshot
+# ============================================================
+# Plan: tfd-blog-next/docs/AI_OPS_AGENT.md, section 5.5.
+#
+# The runner VM (ai-vm, VMID 108) executes code an attacker may influence (the incident text goes
+# through a model). The control that matters is that the VM cannot reach anything on the homelab
+# network. The rules therefore live on the Proxmox host, where a job inside the VM cannot undo them
+# (a firewall inside the VM could be flushed by anything in the docker group).
+#
+# What this playbook does, on the Proxmox host:
+#   1. enables the Proxmox firewall at datacenter level IF it is off, with policy_in/out ACCEPT, so
+#      the host and every other VM behave exactly as today (they have no firewall flag set);
+#   2. writes /etc/pve/firewall/108.fw and turns the firewall flag on for the VM's NIC only:
+#        in : SSH from the LAN, node-exporter from the monitoring VM, ping from the LAN, all else dropped
+#        out: DNS to public resolvers, then DROP to RFC1918 / link-local / CGNAT, then the internet
+#   3. installs /usr/local/sbin/agent-vm-reset and a systemd timer that restore the snapshot `clean`
+#      (skipped while a job is running). The timer stays off until you enable it.
+#
+# LOCK-OUT SAFETY. Enabling the datacenter firewall is the one risky step: this host's SSH port is
+# 1308, which Proxmox's built-in default rules do not know. Policy ACCEPT avoids that, and before
+# enabling anything the playbook arms a dead-man timer (agent-fw-rollback) that switches the
+# datacenter firewall off again after {{ agent_fw_rollback_minutes }} minutes unless you cancel it.
+# Cancel it only after you have confirmed you can still SSH in and reach https://<host>:8006:
+#   ansible-playbook playbooks/networking/agent-runner-firewall.yml -e agent_fw_confirm=true --tags confirm
+# If this host already has a datacenter firewall configured, the playbook refuses to touch it.
+#
+# Usage:
+#   cd ansible
+#   ansible-playbook playbooks/networking/agent-runner-firewall.yml --check --diff   # preview
+#   ansible-playbook playbooks/networking/agent-runner-firewall.yml
+#   ... verify SSH and the web UI, then the confirm command above ...
+#   ... register the runner (agent-runner-setup.yml), then take the snapshot:
+#   ansible-playbook playbooks/networking/agent-runner-firewall.yml -e agent_take_snapshot=true --tags snapshot
+#   ... enable the nightly reset (optional):
+#   ansible-playbook playbooks/networking/agent-runner-firewall.yml -e agent_enable_reset_timer=true --tags reset
+#
+# Verify the LAN is closed (run on the VM; every line must fail or time out):
+#   ping -c1 -W2 192.168.100.205; nc -zw2 192.168.100.205 27017; nc -zw2 192.168.100.201 6443
+#   curl -sS -m5 https://api.github.com/zen        # must still work
+# ============================================================
+- name: Firewall and clean-snapshot reset for the agent runner VM
+  hosts: proxmox
+  become: false
+  gather_facts: false
+
+  vars:
+    agent_vmid: 108
+    agent_vm_name: ai-vm
+    agent_snapshot: clean
+    lan_ssh_from: 192.168.100.0/24
+    monitoring_vm: 192.168.100.220
+    dns_servers:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
+    # Everything a job must not reach. 192.168.0.0/16 includes the whole homelab LAN and the router.
+    denied_destinations:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 169.254.0.0/16
+      - 100.64.0.0/10
+    agent_fw_rollback_minutes: 5
+    agent_fw_confirm: false
+    agent_take_snapshot: false
+    agent_enable_reset_timer: false
+    agent_reset_schedule: "*-*-* 04:00:00"
+
+  tasks:
+    # ------------------------------------------------------------------
+    # Confirm / cancel the dead-man timer
+    # ------------------------------------------------------------------
+    - name: Cancel the lock-out rollback timer (you confirmed SSH and the web UI still work)
+      ansible.builtin.command: systemctl stop agent-fw-rollback.timer agent-fw-rollback.service
+      failed_when: false
+      changed_when: false
+      when: agent_fw_confirm | bool
+      tags: [confirm]
+
+    - name: Confirmed
+      ansible.builtin.meta: end_play
+      when: agent_fw_confirm | bool
+      tags: [confirm]
+
+    # ------------------------------------------------------------------
+    # 1. Datacenter firewall: enable only when it is off, and never overwrite a real configuration
+    # ------------------------------------------------------------------
+    - name: Read the datacenter firewall file
+      ansible.builtin.slurp:
+        src: /etc/pve/firewall/cluster.fw
+      register: cluster_fw_raw
+      failed_when: false
+      tags: [firewall]
+
+    - name: Decide what the datacenter firewall needs
+      ansible.builtin.set_fact:
+        cluster_fw_text: "{{ (cluster_fw_raw.content | b64decode) if (cluster_fw_raw.content is defined) else '' }}"
+      tags: [firewall]
+
+    # "ours" = nothing but the four lines this playbook writes (enable may be 0 after a rollback).
+    - name: Classify it
+      ansible.builtin.set_fact:
+        cluster_fw_missing: "{{ cluster_fw_text | trim == '' }}"
+        cluster_fw_ours: "{{ (cluster_fw_text | trim | regex_replace('(?m)^enable: [01]$', 'enable: X')) == '[OPTIONS]\nenable: X\npolicy_in: ACCEPT\npolicy_out: ACCEPT' }}"
+        cluster_fw_on: "{{ cluster_fw_text is search('(?m)^enable:\\s*1') }}"
+        cluster_fw_accept: "{{ cluster_fw_text is search('(?m)^policy_in:\\s*ACCEPT') }}"
+      tags: [firewall]
+
+    - name: Refuse to touch a datacenter firewall configuration that is not ours and not permissive
+      ansible.builtin.assert:
+        that:
+          - cluster_fw_missing or cluster_fw_ours or (cluster_fw_on and cluster_fw_accept)
+        fail_msg: >-
+          /etc/pve/firewall/cluster.fw has a configuration this playbook did not write and it is not
+          "enable: 1" with "policy_in: ACCEPT". Enable it by hand with a policy that keeps this host's
+          SSH on port 1308 reachable, then re-run so only the rules for VM {{ agent_vmid }} are added.
+      tags: [firewall]
+
+    - name: Work out whether the datacenter firewall must be switched on now
+      ansible.builtin.set_fact:
+        cluster_fw_needs_enable: "{{ cluster_fw_missing or (cluster_fw_ours and not cluster_fw_on) }}"
+      tags: [firewall]
+
+    - name: Arm the lock-out rollback timer before enabling the datacenter firewall
+      ansible.builtin.shell: |
+        systemctl stop agent-fw-rollback.timer agent-fw-rollback.service 2>/dev/null || true
+        systemctl reset-failed agent-fw-rollback.service 2>/dev/null || true
+        systemd-run --unit=agent-fw-rollback --on-active={{ agent_fw_rollback_minutes }}m \
+          /bin/sh -c "sed -i 's/^enable: 1/enable: 0/' /etc/pve/firewall/cluster.fw && pve-firewall restart"
+      when: cluster_fw_needs_enable | bool
+      register: rollback_armed
+      changed_when: rollback_armed.rc == 0
+      tags: [firewall]
+
+    # /etc/pve is pmxcfs: it refuses the chmod and rename that Ansible's copy module always does,
+    # so these files are written with a plain redirect, only when the content differs.
+    - name: Enable the datacenter firewall with permissive policies (host and other VMs unchanged)
+      ansible.builtin.shell: |
+        set -eu
+        f=/etc/pve/firewall/cluster.fw
+        new=$(mktemp)
+        cat > "$new"
+        if cmp -s "$new" "$f" 2>/dev/null; then echo unchanged; else cat "$new" > "$f"; echo changed; fi
+        rm -f "$new"
+      args:
+        executable: /bin/bash
+        stdin: |
+          [OPTIONS]
+          enable: 1
+          policy_in: ACCEPT
+          policy_out: ACCEPT
+      register: dc_write
+      changed_when: "'changed' in dc_write.stdout"
+      when: cluster_fw_needs_enable | bool
+      tags: [firewall]
+
+    # ------------------------------------------------------------------
+    # 2. The VM's own rules and the NIC flag
+    # ------------------------------------------------------------------
+    - name: Write the rules for the agent VM
+      ansible.builtin.shell: |
+        set -eu
+        f=/etc/pve/firewall/{{ agent_vmid }}.fw
+        new=$(mktemp)
+        cat > "$new"
+        if cmp -s "$new" "$f" 2>/dev/null; then echo unchanged; else cat "$new" > "$f"; echo changed; fi
+        rm -f "$new"
+      args:
+        executable: /bin/bash
+        stdin: |
+          # Managed by ansible/playbooks/networking/agent-runner-firewall.yml. Edit there.
+          # First match wins. The VM runs code an attacker may influence: it must not reach the LAN.
+          [OPTIONS]
+          enable: 1
+          policy_in: DROP
+          policy_out: ACCEPT
+          log_level_in: nolog
+          log_level_out: nolog
+
+          [RULES]
+          IN ACCEPT -source {{ lan_ssh_from }} -p tcp -dport 22 -log nolog
+          IN ACCEPT -source {{ monitoring_vm }} -p tcp -dport 9100 -log nolog
+          IN ACCEPT -source {{ lan_ssh_from }} -p icmp -log nolog
+          {% for ns in dns_servers %}
+          OUT ACCEPT -dest {{ ns }} -p udp -dport 53 -log nolog
+          OUT ACCEPT -dest {{ ns }} -p tcp -dport 53 -log nolog
+          {% endfor %}
+          {% for cidr in denied_destinations %}
+          OUT DROP -dest {{ cidr }} -log nolog
+          {% endfor %}
+      register: vm_rules
+      changed_when: "'changed' in vm_rules.stdout"
+      tags: [firewall]
+
+    - name: Turn the firewall flag on for the VM's first NIC
+      ansible.builtin.shell: |
+        set -eu
+        net=$(qm config {{ agent_vmid }} | sed -n 's/^net0: //p')
+        case "$net" in
+          *firewall=1*) echo unchanged; exit 0 ;;
+          *firewall=0*) new=${net/firewall=0/firewall=1} ;;
+          *) new="$net,firewall=1" ;;
+        esac
+        qm set {{ agent_vmid }} --net0 "$new" >/dev/null
+        echo changed
+      args:
+        executable: /bin/bash
+      register: nic_flag
+      changed_when: "'changed' in nic_flag.stdout"
+      tags: [firewall]
+
+    - name: Show the firewall status
+      ansible.builtin.command: pve-firewall status
+      register: fw_status
+      changed_when: false
+      tags: [firewall]
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "pve-firewall: {{ fw_status.stdout }}"
+          - "NIC flag: {{ nic_flag.stdout | default('n/a') }}"
+          - "Now check SSH to this host and https://<host>:8006, then run with -e agent_fw_confirm=true --tags confirm within {{ agent_fw_rollback_minutes }} minutes, or the datacenter firewall switches itself off."
+          - "Then verify from the VM that the LAN is closed (commands in this file's header)."
+      tags: [firewall]
+
+    # ------------------------------------------------------------------
+    # 3. Clean snapshot and reset
+    # ------------------------------------------------------------------
+    - name: Take the clean snapshot (VM is shut down first for a consistent disk)
+      ansible.builtin.shell: |
+        set -eu
+        if qm listsnapshot {{ agent_vmid }} | grep -q " {{ agent_snapshot }} "; then
+          qm delsnapshot {{ agent_vmid }} {{ agent_snapshot }}
+        fi
+        qm shutdown {{ agent_vmid }} --timeout 120
+        qm snapshot {{ agent_vmid }} {{ agent_snapshot }} --description "Registered runner, no job state. Restored by agent-vm-reset."
+        qm start {{ agent_vmid }}
+      args:
+        executable: /bin/bash
+      when: agent_take_snapshot | bool
+      tags: [snapshot]
+
+    - name: Install the reset script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/agent-vm-reset
+        mode: "0750"
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          # Restore the agent runner VM to its clean snapshot. Written by agent-runner-firewall.yml.
+          # Skips when no snapshot exists or a job is running.
+          set -euo pipefail
+          VMID={{ agent_vmid }}
+          SNAP={{ agent_snapshot }}
+          if ! qm listsnapshot "$VMID" | grep -q " $SNAP "; then
+            echo "no snapshot '$SNAP' on VM $VMID, nothing to do"; exit 0
+          fi
+          out=$(qm guest exec "$VMID" -- /usr/bin/pgrep -f Runner.Worker 2>/dev/null || true)
+          if echo "$out" | grep -q '"exitcode" *: *0'; then
+            echo "a job is running on VM $VMID, skipping the reset"; exit 0
+          fi
+          qm stop "$VMID" --timeout 60 || true
+          qm rollback "$VMID" "$SNAP"
+          qm start "$VMID"
+          echo "VM $VMID restored to '$SNAP'"
+      tags: [reset]
+
+    - name: Install the reset service and timer
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: agent-vm-reset.service
+          content: |
+            [Unit]
+            Description=Restore the agent runner VM to its clean snapshot
+
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/agent-vm-reset
+        - name: agent-vm-reset.timer
+          content: |
+            [Unit]
+            Description=Nightly reset of the agent runner VM
+
+            [Timer]
+            OnCalendar={{ agent_reset_schedule }}
+            Persistent=false
+
+            [Install]
+            WantedBy=timers.target
+      register: reset_units
+      tags: [reset]
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: reset_units is changed
+      tags: [reset]
+
+    - name: Enable or disable the nightly reset timer
+      ansible.builtin.systemd:
+        name: agent-vm-reset.timer
+        enabled: "{{ agent_enable_reset_timer | bool }}"
+        state: "{{ 'started' if (agent_enable_reset_timer | bool) else 'stopped' }}"
+      tags: [reset]
