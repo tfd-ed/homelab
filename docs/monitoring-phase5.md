@@ -165,8 +165,11 @@ The playbook adds a systemd drop-in (`/etc/systemd/system/cloudflared.service.d/
 
 | Alert | Fires when | Severity |
 |---|---|---|
+| `TunnelDown` | `cloudflared_tunnel_ha_connections` is 0 for 2 min: nothing reaches the homelab through the tunnel | critical |
 | `TunnelDegraded` | `cloudflared_tunnel_ha_connections` under 2 for 5 min (normally 4) | critical |
 | `TunnelRequestErrors` | Over 5 % of requests fail between the tunnel and the origin for 10 min, with real traffic | warning |
+
+**While the tunnel is down, the alerts that only say "the public site is unreachable" are muted** so that one message is left to read: `TunnelDegraded`, `HttpProbeFailed`, `HttpProbeSlow`, `SiteAvailabilitySloBurn`, `SyntheticJourneyFailing` and `SyntheticProdJourneyDown` (`inhibit_rules` in `templates/monitoring/alertmanager.yml.j2`). The same is true while cloudflared is not running at all (`ScrapeTargetDown` for job `cloudflared`). Nothing that runs inside the homelab is muted: pods, databases, the SSR-to-API link and the TCP probes of the VMs keep alerting, because they are what you read next. If the muted alerts are still in the Alerts page, that is Alertmanager showing them as inhibited, not a fault. There is deliberately no "node down mutes that node's pod alerts" rule: the pod alerts have no `node` label, so such a rule would also mute real pod failures on the healthy nodes during a node outage.
 
 The HTTP probes already catch a total outage from outside; these catch the half-broken cases. The metric names were taken from cloudflared's documentation and not checked against your running version: after applying, open `http://<gateway IP>:20241/metrics` and confirm `cloudflared_tunnel_ha_connections`, `cloudflared_tunnel_total_requests` and `cloudflared_tunnel_request_errors` exist; if one is named differently, fix `alerts/tunnel.yml` and its test.
 
