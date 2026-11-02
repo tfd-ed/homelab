@@ -27,6 +27,43 @@ tests:
               description: "cloudflared on gw:20241 has fewer than 2 high-availability connections to Cloudflare for 5 minutes. Traffic may still flow on the rest, but one more failure is an outage. Check the gateway VM's internet access and systemctl status cloudflared."
               runbook: "homelab-journey/docs/monitoring-phase5.md#tunnel-metrics"
 
+  - name: no connection at all is TunnelDown after two minutes, and then degraded too
+    interval: 1m
+    input_series:
+      - series: 'cloudflared_tunnel_ha_connections{job="cloudflared", instance="gw:20241"}'
+        values: '4 4 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TunnelDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TunnelDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: cloudflared, instance: "gw:20241"}
+            exp_annotations:
+              summary: "The Cloudflare tunnel has no connection to the edge: the site and the API are unreachable from outside"
+              description: "cloudflared on gw:20241 has had no high-availability connection to Cloudflare for 2 minutes. Nothing reaches the homelab through the tunnel. Check the gateway VM's internet access and systemctl status cloudflared. Probe and synthetic alerts about the public site are muted while this fires."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#tunnel-metrics"
+      # TunnelDegraded fires as well after its five minutes; Alertmanager mutes it behind TunnelDown.
+      - eval_time: 10m
+        alertname: TunnelDegraded
+        exp_alerts:
+          - exp_labels: {severity: critical, job: cloudflared, instance: "gw:20241"}
+            exp_annotations:
+              summary: "The Cloudflare tunnel has 0 connection(s) to the edge (normally 4)"
+              description: "cloudflared on gw:20241 has fewer than 2 high-availability connections to Cloudflare for 5 minutes. Traffic may still flow on the rest, but one more failure is an outage. Check the gateway VM's internet access and systemctl status cloudflared."
+              runbook: "homelab-journey/docs/monitoring-phase5.md#tunnel-metrics"
+
+  - name: one connection is degraded, not down
+    interval: 1m
+    input_series:
+      - series: 'cloudflared_tunnel_ha_connections{job="cloudflared", instance="gw:20241"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TunnelDown
+        exp_alerts: []
+
   - name: two connections is not degraded
     interval: 1m
     input_series:

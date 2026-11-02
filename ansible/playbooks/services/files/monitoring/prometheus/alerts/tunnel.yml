@@ -12,6 +12,20 @@
 groups:
   - name: tunnel
     rules:
+      # No connection at all: the site and the API cannot be reached from outside. Every alert about the
+      # public path (HTTP probes, the site SLO, the synthetic journeys) fails for this one reason, so
+      # Alertmanager mutes them while this fires (templates/monitoring/alertmanager.yml.j2, inhibit_rules)
+      # and this is the one message to read. Alerts about things inside the homelab are not muted.
+      - alert: TunnelDown
+        expr: cloudflared_tunnel_ha_connections == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The Cloudflare tunnel has no connection to the edge: the site and the API are unreachable from outside"
+          description: "cloudflared on {{ $labels.instance }} has had no high-availability connection to Cloudflare for 2 minutes. Nothing reaches the homelab through the tunnel. Check the gateway VM's internet access and systemctl status cloudflared. Probe and synthetic alerts about the public site are muted while this fires."
+          runbook: "homelab-journey/docs/monitoring-phase5.md#tunnel-metrics"
+
       # cloudflared normally keeps four connections to the edge. One left is one link failure away from an outage.
       - alert: TunnelDegraded
         expr: cloudflared_tunnel_ha_connections < 2

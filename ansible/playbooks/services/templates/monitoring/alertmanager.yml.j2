@@ -47,6 +47,22 @@ inhibit_rules:
     target_matchers: [severity = "warning"]
     equal: [alertname, instance]
 
+  # With the tunnel down, every check that goes out through Cloudflare fails for that one reason: the
+  # HTTP probes, the site SLO, the synthetic journeys. The tunnel is a single path, so no `equal`.
+  # Only those checks are muted. What runs inside the homelab (pods, databases, the SSR-to-API link, TCP
+  # probes of the VMs) keeps alerting, because those are exactly what you read next.
+  - source_matchers: [alertname = "TunnelDown"]
+    target_matchers:
+      - alertname =~ "TunnelDegraded|HttpProbeFailed|HttpProbeSlow|SiteAvailabilitySloBurn|SyntheticJourneyFailing|SyntheticProdJourneyDown"
+  # cloudflared itself is not running (no metrics to say "0 connections"): the same consequence.
+  - source_matchers: [alertname = "ScrapeTargetDown", job = "cloudflared"]
+    target_matchers:
+      - alertname =~ "HttpProbeFailed|HttpProbeSlow|SiteAvailabilitySloBurn|SyntheticJourneyFailing|SyntheticProdJourneyDown"
+
+  # Deliberately no "node down mutes that node's pod alerts": the pod alerts carry no `node` label, so a
+  # rule without `equal: [node]` would also mute real pod failures on the healthy nodes in the middle of
+  # a node outage, which is when two things break at once.
+
 receivers:
   - name: blackhole
 
