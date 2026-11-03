@@ -78,6 +78,13 @@ Only the gateway VM (and a few listed hosts) may open connections to the K3s ing
 - Standalone runner setup without CI/CD infrastructure
 - Alternative to cicd-setup.yml for specific use cases
 
+### agent-runner-firewall.yml
+**Purpose:** Deny the homelab LAN to the agent runner VM and reset it from a clean snapshot  
+**Target:** proxmox-host (rules live on the host, so a job inside the VM cannot lift them)  
+**Usage:** `./script/run-agent-runner-setup.sh firewall`, then `confirm`, later `snapshot`
+
+**Does:** enables the Proxmox firewall at datacenter level only if it is off (policy ACCEPT, host and other VMs unchanged) behind a 5 minute dead-man rollback; writes `/etc/pve/firewall/108.fw` (in: SSH and ping from the LAN, node-exporter from monitoring; out: public DNS, then drop RFC1918, link-local and CGNAT, then the internet); sets the VM's NIC firewall flag; installs `agent-vm-reset` and an optional nightly timer.
+
 ## Comparison: github-runner-setup.yml vs cicd-setup.yml
 
 | Feature | github-runner-setup.yml | cicd-setup.yml |

@@ -114,6 +114,13 @@ cd actions-runner
 ./config.sh --url https://github.com/USER/REPO --token TOKEN
 ```
 
+### agent-runner-setup.yml
+**Purpose:** Isolated GitHub Actions runner for the AI fix agent (plan: `tfd-blog-next/docs/AI_OPS_AGENT.md`, section 5.5); replaces the retired Ollama setup  
+**Target:** ai-vm (192.168.100.250)  
+**Usage:** `./script/run-agent-runner-setup.sh software`
+
+**Does:** removes Ollama; installs Docker, Node 22, pnpm, `gh`; creates the unprivileged `agent-runner` user; pre-pulls the mongo and redis sandbox images; unpacks the runner and installs `agent-runner-register`. It does not register the runner and puts no homelab credential on the VM. Run `networking/agent-runner-firewall.yml` before registering.
+
 ## Execution Order
 
 Recommended setup sequence:

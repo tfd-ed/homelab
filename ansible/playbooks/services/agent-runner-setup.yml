@@ -1,0 +1,337 @@
+---
+# ============================================================
+# Agent runner: an isolated GitHub Actions runner for the AI fix agent
+# ============================================================
+# Plan: tfd-blog-next/docs/AI_OPS_AGENT.md, section 5.5 (the agent runner) and Phase 6.
+#
+# What it does on ai-vm (the old Ollama VM, 192.168.100.250):
+#   1. removes Ollama (unused; the n8n workflows that called it are inactive);
+#   2. installs Docker, Node 22, pnpm, git, jq and the GitHub CLI;
+#   3. creates the unprivileged user `agent-runner` (no sudo, in the docker group);
+#   4. pre-pulls the mongo and redis images the API sandbox needs (versions match database-setup.yml);
+#   5. downloads the GitHub Actions runner and installs a registration helper.
+#
+# What it deliberately does NOT do:
+#   - register the runner. That needs a short-lived token, see "Register" below;
+#   - put any homelab credential on the VM (no kubeconfig, no SOPS or age key, no registry login,
+#     no database password). The runner has none of the ci-cd VM's access;
+#   - open or close any network path. The LAN is denied by the Proxmox firewall, which a job on the
+#     VM cannot lift: run playbooks/networking/agent-runner-firewall.yml for that.
+#
+# The docker group is root-equivalent inside this VM. That is acceptable only because the VM holds
+# nothing of value, the Proxmox firewall keeps it off the LAN, and it is restored from a clean
+# snapshot (agent-runner-firewall.yml). Do not reuse this VM for anything else.
+#
+# Usage:
+#   cd ansible
+#   ansible-playbook playbooks/services/agent-runner-setup.yml
+#
+# Register (once, after the firewall playbook; the token is valid for one hour):
+#   1. Get a registration token (repo admin; `gh` as the repo owner):
+#        gh api -X POST repos/tfd-ed/tfd-next-api/actions/runners/registration-token --jq .token
+#   2. On the VM:
+#        sudo agent-runner-register https://github.com/tfd-ed/tfd-next-api <token>
+#      The runner gets ONLY the label `agent` (no `self-hosted`), so the deploy workflows, which
+#      use `runs-on: [self-hosted]`, can never be scheduled on it. Jobs use `runs-on: [agent]`.
+#      If GitHub will not route a job to a runner without `self-hosted` (check with spike test H),
+#      re-run the helper with --with-default-labels and give the ci-cd runner a `deploy` label and
+#      the deploy workflows `[self-hosted, deploy]` first.
+#   3. Take the clean snapshot: ansible-playbook playbooks/networking/agent-runner-firewall.yml \
+#        -e agent_take_snapshot=true --tags snapshot
+#
+# Safe to re-run: every step is idempotent except the Ollama removal, which is a no-op once done.
+# ============================================================
+- name: Set up the isolated GitHub Actions runner for the AI fix agent
+  hosts: ai-vm
+  become: true
+  gather_facts: true
+
+  vars:
+    agent_user: agent-runner
+    agent_runner_dir: /home/agent-runner/actions-runner
+    agent_remove_ollama: true
+    node_major: 22
+    pnpm_version: "9.3.0" # matches packageManager in tfd-api-next/package.json
+    # Same versions as playbooks/services/database-setup.yml, so a sandbox behaves like the real servers.
+    sandbox_images:
+      - "mongo:8.2"
+      - "redis:8.2.1-alpine"
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. Retire Ollama
+    # ------------------------------------------------------------------
+    - name: Check whether the Ollama service exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/ollama.service
+      register: ollama_unit
+      when: agent_remove_ollama
+
+    - name: Stop and disable Ollama
+      ansible.builtin.systemd:
+        name: ollama
+        state: stopped
+        enabled: false
+      when: agent_remove_ollama and ollama_unit.stat.exists
+
+    - name: Remove Ollama files and its data (models)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/ollama.service
+        - /etc/systemd/system/ollama.service.d
+        - /usr/local/bin/ollama
+        - /usr/local/lib/ollama
+        - /usr/share/ollama
+        - /opt/ollama
+      when: agent_remove_ollama
+
+    - name: Remove the ollama user
+      ansible.builtin.user:
+        name: ollama
+        state: absent
+        remove: true
+      when: agent_remove_ollama
+
+    - name: Reload systemd after removing Ollama
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: agent_remove_ollama
+
+    # ------------------------------------------------------------------
+    # 2. Packages, Docker, Node, pnpm, GitHub CLI
+    # ------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - git
+          - jq
+          - unzip
+          - tar
+          - build-essential
+        state: present
+
+    - name: Create the apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    # Docker, installed the same way as playbooks/infrastructure/docker-setup.yml.
+    - name: Add the Docker GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add the Docker repository
+      ansible.builtin.shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    # Node 22, the version the API's CI uses.
+    - name: Add the NodeSource GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+        chmod a+r /etc/apt/keyrings/nodesource.gpg
+      args:
+        creates: /etc/apt/keyrings/nodesource.gpg
+
+    - name: Add the NodeSource repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/nodesource.list
+        content: "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_{{ node_major }}.x nodistro main\n"
+        mode: "0644"
+
+    # GitHub CLI, used by the job to read the incident issue.
+    - name: Add the GitHub CLI GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+        chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/githubcli-archive-keyring.gpg
+
+    - name: Add the GitHub CLI repository
+      ansible.builtin.shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+      args:
+        creates: /etc/apt/sources.list.d/github-cli.list
+
+    - name: Update apt cache after adding repositories
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Install Docker, Node and the GitHub CLI
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+          - nodejs
+          - gh
+        state: present
+
+    - name: Install pnpm (pinned; to change the version remove /usr/bin/pnpm and re-run)
+      ansible.builtin.command: "npm install -g pnpm@{{ pnpm_version }}"
+      args:
+        creates: /usr/bin/pnpm
+
+    - name: Configure the Docker daemon (bounded logs)
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "log-driver": "json-file",
+            "log-opts": { "max-size": "10m", "max-file": "3" }
+          }
+        mode: "0644"
+      notify: Restart Docker
+
+    - name: Ensure Docker is enabled and started
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    # ------------------------------------------------------------------
+    # 3. The unprivileged runner user
+    # ------------------------------------------------------------------
+    - name: Create the runner user (no sudo)
+      ansible.builtin.user:
+        name: "{{ agent_user }}"
+        shell: /bin/bash
+        create_home: true
+        groups: docker
+        append: true
+        password_lock: true
+
+    # ------------------------------------------------------------------
+    # 4. Sandbox images, pulled once so a job starts warm
+    # ------------------------------------------------------------------
+    - name: Pre-pull the sandbox images
+      ansible.builtin.command: "docker pull {{ item }}"
+      loop: "{{ sandbox_images }}"
+      register: image_pull
+      changed_when: "'Downloaded newer image' in image_pull.stdout"
+
+    # ------------------------------------------------------------------
+    # 5. The runner software and its registration helper
+    # ------------------------------------------------------------------
+    - name: Look up the latest runner release
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/actions/runner/releases/latest
+        return_content: true
+        headers:
+          Accept: application/vnd.github+json
+      register: runner_release
+      when: agent_runner_version is not defined
+
+    - name: Pick the runner version
+      ansible.builtin.set_fact:
+        agent_runner_version_resolved: "{{ agent_runner_version | default(runner_release.json.tag_name | regex_replace('^v', '')) }}"
+
+    - name: Create the runner directory
+      ansible.builtin.file:
+        path: "{{ agent_runner_dir }}"
+        state: directory
+        owner: "{{ agent_user }}"
+        group: "{{ agent_user }}"
+        mode: "0755"
+
+    - name: Download and unpack the runner
+      ansible.builtin.unarchive:
+        src: "https://github.com/actions/runner/releases/download/v{{ agent_runner_version_resolved }}/actions-runner-linux-x64-{{ agent_runner_version_resolved }}.tar.gz"
+        dest: "{{ agent_runner_dir }}"
+        remote_src: true
+        owner: "{{ agent_user }}"
+        group: "{{ agent_user }}"
+        creates: "{{ agent_runner_dir }}/config.sh"
+
+    - name: Install the runner's OS dependencies
+      ansible.builtin.command: ./bin/installdependencies.sh
+      args:
+        chdir: "{{ agent_runner_dir }}"
+        creates: "{{ agent_runner_dir }}/.dependencies-installed"
+      register: runner_deps
+
+    - name: Mark the runner dependencies as installed
+      ansible.builtin.file:
+        path: "{{ agent_runner_dir }}/.dependencies-installed"
+        state: touch
+        mode: "0644"
+      when: runner_deps is changed
+
+    - name: Install the registration helper
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/agent-runner-register
+        mode: "0750"
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          # Register this VM as a GitHub Actions runner with the single label `agent`.
+          # Usage: sudo agent-runner-register <repo-url> <registration-token> [--with-default-labels]
+          # Written by agent-runner-setup.yml. The token comes from:
+          #   gh api -X POST repos/<owner>/<repo>/actions/runners/registration-token --jq .token
+          set -euo pipefail
+          URL="${1:?repo url}"
+          TOKEN="${2:?registration token}"
+          LABELS_FLAG="--no-default-labels"
+          [ "${3:-}" = "--with-default-labels" ] && LABELS_FLAG=""
+          DIR="{{ agent_runner_dir }}"
+          USER_NAME="{{ agent_user }}"
+          if [ -f "$DIR/.runner" ]; then
+            echo "Already registered ($DIR/.runner exists). Remove it with:"
+            echo "  sudo -u $USER_NAME $DIR/config.sh remove --token <removal-token>"
+            exit 1
+          fi
+          sudo -u "$USER_NAME" "$DIR/config.sh" --unattended --replace \
+            --url "$URL" --token "$TOKEN" \
+            --name "agent-vm" --labels "agent" $LABELS_FLAG \
+            --work _work
+          cd "$DIR"
+          ./svc.sh install "$USER_NAME"
+          ./svc.sh start
+          echo "Registered. Take the clean snapshot now (see agent-runner-setup.yml)."
+
+    - name: Show what was installed
+      ansible.builtin.shell: |
+        echo "docker: $(docker --version)"
+        echo "compose: $(docker compose version)"
+        echo "node: $(node --version)"
+        echo "pnpm: $(pnpm --version)"
+        echo "gh: $(gh --version | head -1)"
+        echo "runner: {{ agent_runner_version_resolved }}"
+        docker images --format '{% raw %}{{.Repository}}:{{.Tag}}{% endraw %}' | sort
+      register: installed
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ installed.stdout_lines }}"
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg:
+          - "1. Run playbooks/networking/agent-runner-firewall.yml (denies the LAN) before registering."
+          - "2. Register: sudo agent-runner-register https://github.com/tfd-ed/tfd-next-api <token>"
+          - "3. Snapshot: ansible-playbook playbooks/networking/agent-runner-firewall.yml -e agent_take_snapshot=true --tags snapshot"
+
+  handlers:
+    - name: Restart Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
