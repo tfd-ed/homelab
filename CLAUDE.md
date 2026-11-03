@@ -2,6 +2,16 @@
 
 Proxmox homelab (Terraform + Ansible + K3s). Not for heavy production: unstable power/internet in Cambodia. See `README.md` and `terraform/README.md`.
 
+## Starting a session
+
+Other Claude sessions may be using this checkout at the same time. A session therefore works on its **own branch in its own git worktree**, cut from a fresh `origin/master`, and never changes a checkout it did not create. Do this before the first edit and without waiting to be asked, unless the user is continuing a named branch or pull request (then use that branch's worktree, or create one for it).
+
+1. `git fetch origin`.
+2. `git worktree add ../worktrees/<repo>-<short-name> -b <type>/<short-name> origin/master` (`<type>` is `feat`, `fix`, `docs` or `chore`). Work, commit and push from that folder. Reuse the main checkout's `node_modules` with a symlink instead of installing again.
+3. In the main checkout never run `git switch`, `checkout`, `pull`, `stash`, `reset` or `clean`, and never discard or overwrite files there: its uncommitted changes may be another session's work. Read it freely.
+4. A dirty or stale main checkout can show files that are already merged as modified or untracked. Compare against `origin/master` (`git diff origin/master -- <file>`) before treating them as unfinished work.
+5. Never commit to `master` directly; open a pull request to `master` (this repo has no `develop`). Remove the worktree (`git worktree remove`) once the pull request is merged.
+
 ## Related Repositories
 
 This project is one of four sibling repos that together make up the platform. Each repo's agent instructions should know about the others; keep this section in sync across all four when paths or responsibilities change.
