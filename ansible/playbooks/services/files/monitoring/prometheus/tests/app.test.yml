@@ -163,4 +163,4 @@ tests:
             exp_annotations:
               summary: "Failed logins: 1 per second"
               description: "Login attempts are failing at a high rate: credential stuffing, or a broken login flow after a deploy."
-              runbook: "homelab-journey/docs/monitoring-phase3.md#throttlingspike"
+              runbook: "homelab-journey/docs/runbooks/login-failures.md"

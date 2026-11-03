@@ -116,7 +116,7 @@ A due Telegram notification has waited over 15 minutes, or failed rows keep grow
 Publishes to Redis keep failing (or `RealtimeHandshakeRejectionsSpike`: websocket handshakes are refused in bulk). Check Redis; after a deploy, check auth.
 
 ### ThrottlingSpike
-Rate limiting answers 429 to over 1 request per second for 10 minutes, or logins fail at over 0.5 per second (`LoginFailureSpike`): a client bug looping, a scraper or credential stuffing. Loki: `{app="tfd-api"} | json | status = 429` shows routes and countries.
+Rate limiting answers 429 to over 1 request per second for 10 minutes, or logins fail at over 0.5 per second (`LoginFailureSpike`): a client bug looping, a scraper or credential stuffing. Loki: `{app="tfd-api"} | json | status = 429` shows routes and countries. What to do: [runbooks/api-flood.md](runbooks/api-flood.md) for a flood, [runbooks/login-failures.md](runbooks/login-failures.md) for `LoginFailureSpike`.
 
 ### TraceCollectorDroppingSpans
 `alloy-traces` drops spans or cannot reach Tempo. `kubectl -n monitoring logs deploy/alloy-traces`, `docker logs tempo` on the monitoring VM. Tracing is best effort: nothing in the apps is affected.
